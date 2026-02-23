@@ -1,47 +1,29 @@
 // screenshot.mjs — Mobile + Desktop screenshots of Tier 1 & high-score Tier 2 leads
+//
+// Usage:
+//   node pipeline/3-screenshot.mjs
+//   node pipeline/3-screenshot.mjs --neighborhood=salamanca
+//   node pipeline/3-screenshot.mjs -n salamanca
+import 'dotenv/config';
 import puppeteer from 'puppeteer';
 import sharp from 'sharp';
-import XLSX from 'xlsx';
 import { mkdirSync, writeFileSync, appendFileSync, existsSync } from 'fs';
 import pLimit from 'p-limit';
+import { sanitizeName, getNeighborhoodName, getTargetLeads } from './utils.mjs';
 
-const INPUT_FILE = 'output/leads_audited.xlsx';
-const SCREENSHOT_DIR = 'output/screenshots';
-const ERROR_LOG = 'output/screenshots/errors.log';
-const MANIFEST_FILE = 'output/screenshots/manifest.json';
+const NEIGHBORHOOD = getNeighborhoodName();
+const INPUT_FILE = `output/leads_audited_${NEIGHBORHOOD}.xlsx`;
+const SCREENSHOT_DIR = `output/screenshots_${NEIGHBORHOOD}`;
+const ERROR_LOG = `${SCREENSHOT_DIR}/errors.log`;
+const MANIFEST_FILE = `${SCREENSHOT_DIR}/manifest.json`;
 const CONCURRENCY = 3;
 const TIMEOUT_MS = 20000;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-function sanitizeName(name) {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9áéíóúñü\s_-]/g, '')
-    .replace(/\s+/g, '_')
-    .substring(0, 50)
-    .replace(/_+$/, '');
-}
-
 function logError(msg) {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
   appendFileSync(ERROR_LOG, line);
   console.error(`  ✗ ${msg}`);
-}
-
-function getTargetLeads() {
-  const wb = XLSX.readFile(INPUT_FILE);
-  const tier1 = XLSX.utils.sheet_to_json(wb.Sheets['Tier 1 Hot Leads']);
-  const allLeads = XLSX.utils.sheet_to_json(wb.Sheets['All Leads']);
-  const tier2high = allLeads.filter(r => r.tier === 'Tier 2' && r.opportunity_score >= 50);
-  const combined = [...tier1, ...tier2high];
-  // Deduplicate by website
-  const seen = new Set();
-  return combined.filter(lead => {
-    const url = lead.final_url || lead.website;
-    if (!url || seen.has(url)) return false;
-    seen.add(url);
-    return true;
-  });
 }
 
 async function createPlaceholder(filepath, text) {
@@ -54,8 +36,16 @@ async function createPlaceholder(filepath, text) {
 
 // ── Main ────────────────────────────────────────────────────────────────────
 async function main() {
+  if (!existsSync(INPUT_FILE)) {
+    console.error(`[ERROR] Input file not found: ${INPUT_FILE}`);
+    console.error(`  Run the auditor first: node pipeline/2-auditor.mjs -n ${NEIGHBORHOOD}`);
+    process.exit(1);
+  }
+
+  mkdirSync(SCREENSHOT_DIR, { recursive: true });
+
   const startTime = Date.now();
-  const leads = getTargetLeads();
+  const leads = getTargetLeads(INPUT_FILE, 50);
   console.log(`[SCREENSHOT] ${leads.length} target leads (Tier 1 + Tier 2 score>=50)`);
 
   // Clear error log
