@@ -1,11 +1,20 @@
-// postcards.mjs — Generate printable A5 postcard PDFs for Tier 1 leads
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import XLSX from 'xlsx';
+// pipeline/6-postcards.mjs — Generate printable A5 postcard PDFs for Tier 1 leads
+//
+// Usage:
+//   node pipeline/6-postcards.mjs
+//   node pipeline/6-postcards.mjs --neighborhood=salamanca
+//   node pipeline/6-postcards.mjs -n salamanca
 
-const MANIFEST_FILE = 'output/screenshots/manifest.json';
-const INPUT_FILE = 'output/leads_audited.xlsx';
-const POSTCARD_DIR = 'output/postcards';
+import 'dotenv/config';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { getNeighborhoodName, sanitizeName, getTargetLeads } from './utils.mjs';
+
+const NEIGHBORHOOD = getNeighborhoodName();
+const INPUT_FILE = `output/leads_audited_${NEIGHBORHOOD}.xlsx`;
+const SCREENSHOT_DIR = `output/screenshots_${NEIGHBORHOOD}`;
+const MANIFEST_FILE = `${SCREENSHOT_DIR}/manifest.json`;
+const POSTCARD_DIR = `output/postcards_${NEIGHBORHOOD}`;
 
 // A5 in points (1mm = 2.835pt)
 const A5_WIDTH = 148 * 2.835;  // ~419.6pt
@@ -13,6 +22,10 @@ const A5_HEIGHT = 210 * 2.835; // ~595.4pt
 
 const MARGIN = 28;
 const CONTENT_WIDTH = A5_WIDTH - MARGIN * 2;
+
+// Contact info from environment variables
+const YOUR_PHONE = process.env.YOUR_PHONE || '[TU TELÉFONO]';
+const YOUR_NAME = process.env.YOUR_NAME || 'Tu Nombre';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function translatePitch(pitch) {
@@ -53,6 +66,16 @@ function wrapText(text, font, fontSize, maxWidth) {
 
 // ── Main ────────────────────────────────────────────────────────────────────
 async function main() {
+  // Check input file exists before anything else
+  if (!existsSync(INPUT_FILE)) {
+    console.error(`[ERROR] Audited leads file not found: ${INPUT_FILE}`);
+    console.error(`  Run the auditor first: node pipeline/2-auditor.mjs -n ${NEIGHBORHOOD}`);
+    process.exit(1);
+  }
+
+  // Ensure output directory exists
+  mkdirSync(POSTCARD_DIR, { recursive: true });
+
   // Load manifest
   if (!existsSync(MANIFEST_FILE)) {
     console.error(`[ERROR] Manifest not found: ${MANIFEST_FILE}. Run screenshot.mjs first.`);
@@ -61,10 +84,9 @@ async function main() {
   const manifest = JSON.parse(readFileSync(MANIFEST_FILE, 'utf-8'));
 
   // Load lead data for pitch angles
-  const wb = XLSX.readFile(INPUT_FILE);
-  const allLeads = XLSX.utils.sheet_to_json(wb.Sheets['All Leads']);
+  const leads = getTargetLeads(INPUT_FILE);
   const leadMap = new Map();
-  for (const lead of allLeads) {
+  for (const lead of leads) {
     leadMap.set(lead.name, lead);
   }
 
@@ -225,7 +247,7 @@ async function main() {
       });
       y -= 16;
 
-      page.drawText('Llámame: [TU TELÉFONO]', {
+      page.drawText(`Llámame: ${YOUR_PHONE}`, {
         x: MARGIN,
         y: y,
         size: 10,
@@ -235,7 +257,7 @@ async function main() {
       y -= 18;
 
       // ── Footer ──
-      page.drawText('Kevin León — Diseño Web Profesional', {
+      page.drawText(`${YOUR_NAME} — Diseño Web Profesional`, {
         x: MARGIN,
         y: Math.max(y, MARGIN),
         size: 9,
