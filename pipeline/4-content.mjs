@@ -1,44 +1,34 @@
-// scrape-content.mjs — Extract structured website content from target leads
+// pipeline/4-content.mjs — Extract structured website content from target leads
+//
+// Usage:
+//   node pipeline/4-content.mjs
+//   node pipeline/4-content.mjs --neighborhood salamanca
+//   node pipeline/4-content.mjs -n retiro
+
+import 'dotenv/config';
 import puppeteer from 'puppeteer';
-import XLSX from 'xlsx';
-import { mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import pLimit from 'p-limit';
+import { getNeighborhoodName, sanitizeName, getTargetLeads, findLogo } from './utils.mjs';
 
-const INPUT_FILE = 'output/leads_audited.xlsx';
-const CONTENT_DIR = 'output/content';
+const NEIGHBORHOOD = getNeighborhoodName();
+const INPUT_FILE = `output/leads_audited_${NEIGHBORHOOD}.xlsx`;
+const CONTENT_DIR = `output/content_${NEIGHBORHOOD}`;
 const CONCURRENCY = 3;
 const TIMEOUT_MS = 20000;
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-function sanitizeName(name) {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9áéíóúñü\s_-]/g, '')
-    .replace(/\s+/g, '_')
-    .substring(0, 50)
-    .replace(/_+$/, '');
-}
-
-function getTargetLeads() {
-  const wb = XLSX.readFile(INPUT_FILE);
-  const tier1 = XLSX.utils.sheet_to_json(wb.Sheets['Tier 1 Hot Leads']);
-  const allLeads = XLSX.utils.sheet_to_json(wb.Sheets['All Leads']);
-  const tier2high = allLeads.filter(r => r.tier === 'Tier 2' && r.opportunity_score >= 50);
-  const combined = [...tier1, ...tier2high];
-  const seen = new Set();
-  return combined.filter(lead => {
-    const url = lead.final_url || lead.website;
-    if (!url || seen.has(url)) return false;
-    seen.add(url);
-    return true;
-  });
-}
-
 // ── Main ────────────────────────────────────────────────────────────────────
 async function main() {
+  if (!existsSync(INPUT_FILE)) {
+    console.error(`[ERROR] Input file not found: ${INPUT_FILE}`);
+    console.error(`        Run the auditor first: node pipeline/2-auditor.mjs --neighborhood ${NEIGHBORHOOD}`);
+    process.exit(1);
+  }
+
   const startTime = Date.now();
-  const leads = getTargetLeads();
+  const leads = getTargetLeads(INPUT_FILE);
+  console.log(`[SCRAPE] Neighborhood: ${NEIGHBORHOOD}`);
   console.log(`[SCRAPE] ${leads.length} target leads`);
 
   const browser = await puppeteer.launch({
@@ -162,19 +152,16 @@ async function main() {
 
         Object.assign(contentData, extracted);
 
-        // Find logo
-        const logoImg = extracted.images.find(i => i.isLogo);
+        // Find logo using utils (skips CDN domains)
+        const logoImg = findLogo(extracted.images);
         if (logoImg) {
           contentData.logoUrl = logoImg.src;
-          // Download logo
           try {
-            const logoPage = await browser.newPage();
-            const logoResp = await logoPage.goto(logoImg.src, { timeout: 10000 });
-            if (logoResp && logoResp.ok()) {
-              const logoBuffer = await logoResp.buffer();
-              writeFileSync(join(leadDir, 'logo.png'), logoBuffer);
+            const resp = await fetch(logoImg.src);
+            if (resp.ok) {
+              const buffer = Buffer.from(await resp.arrayBuffer());
+              writeFileSync(join(leadDir, 'logo.png'), buffer);
             }
-            await logoPage.close();
           } catch { /* logo download failed, non-critical */ }
         }
 
@@ -186,14 +173,12 @@ async function main() {
 
         for (let idx = 0; idx < nonLogoImages.length; idx++) {
           try {
-            const imgPage = await browser.newPage();
-            const imgResp = await imgPage.goto(nonLogoImages[idx].src, { timeout: 10000 });
-            if (imgResp && imgResp.ok()) {
-              const imgBuffer = await imgResp.buffer();
+            const resp = await fetch(nonLogoImages[idx].src);
+            if (resp.ok) {
+              const buffer = Buffer.from(await resp.arrayBuffer());
               const ext = nonLogoImages[idx].src.match(/\.(jpg|jpeg|png|gif|webp|svg)/i)?.[1] || 'png';
-              writeFileSync(join(imagesDir, `image_${idx + 1}.${ext}`), imgBuffer);
+              writeFileSync(join(imagesDir, `image_${idx + 1}.${ext}`), buffer);
             }
-            await imgPage.close();
           } catch { /* image download failed, non-critical */ }
         }
 
@@ -227,6 +212,7 @@ async function main() {
   console.log('\n═══════════════════════════════════════════');
   console.log('  CONTENT SCRAPE COMPLETE');
   console.log('═══════════════════════════════════════════');
+  console.log(`  Neighborhood:     ${NEIGHBORHOOD}`);
   console.log(`  Leads processed:  ${leads.length}`);
   console.log(`  Scraped OK:       ${successCount}`);
   console.log(`  Errors:           ${leads.length - successCount}`);
