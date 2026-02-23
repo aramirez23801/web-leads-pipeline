@@ -43,8 +43,8 @@ function parseCliCoord(flag) {
   return null;
 }
 
-const ORIGIN_LAT = parseCliCoord('--lat') ?? parseFloat(process.env.ORIGIN_LAT) || 40.437750;
-const ORIGIN_LON = parseCliCoord('--lon') ?? parseFloat(process.env.ORIGIN_LON) || -3.681861;
+const ORIGIN_LAT = (parseCliCoord('--lat') ?? parseFloat(process.env.ORIGIN_LAT)) || 40.437750;
+const ORIGIN_LON = (parseCliCoord('--lon') ?? parseFloat(process.env.ORIGIN_LON)) || -3.681861;
 const LOCATION_LABEL = NEIGHBORHOOD.replace(/_/g, ' ');
 const XLSX_PATH = join(OUTPUT_DIR, `businesses_${NEIGHBORHOOD}.xlsx`);
 const LOG_PATH = join(OUTPUT_DIR, `scraper_${NEIGHBORHOOD}.log`);
