@@ -1,81 +1,128 @@
+/**
+ * pipeline/1-scraper.mjs — Scrape local businesses via Outscraper Google Maps API.
+ *
+ * Usage:
+ *   # 1. Use defaults from .env or hardcoded fallback (maria_de_molina):
+ *   node pipeline/1-scraper.mjs
+ *
+ *   # 2. Override neighborhood via CLI flags:
+ *   node pipeline/1-scraper.mjs --neighborhood retiro --lat 40.4153 --lon -3.6844
+ *
+ *   # 3. Dry run (single query, 3 results, no tracker update):
+ *   node pipeline/1-scraper.mjs --dry-run
+ *   node pipeline/1-scraper.mjs --neighborhood retiro --lat 40.4153 --lon -3.6844 --dry-run
+ */
+
 import 'dotenv/config';
 import * as XLSX from 'xlsx';
-import { writeFileSync, appendFileSync, mkdirSync } from 'fs';
+import { writeFileSync, readFileSync, appendFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { getNeighborhoodName } from './utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const OUTPUT_DIR = join(__dirname, 'output');
-const XLSX_PATH = join(OUTPUT_DIR, 'businesses_near_maria_de_molina.xlsx');
-const LOG_PATH = join(OUTPUT_DIR, 'scraper_log.txt');
+const OUTPUT_DIR = join(__dirname, '..', 'output');
+const TRACKER_PATH = join(__dirname, '..', 'neighborhoods.json');
 
 // Ensure output dir exists
 mkdirSync(OUTPUT_DIR, { recursive: true });
 
-// ─── Config ───────────────────────────────────────────────────────────────────
+// ─── Neighborhood Config ───────────────────────────────────────────────────────
+
+const NEIGHBORHOOD = getNeighborhoodName();
+
+// Parse --lat / --lon from CLI (not in utils since it's scraper-specific)
+function parseCliCoord(flag) {
+  const args = process.argv;
+  for (let i = 2; i < args.length; i++) {
+    if (args[i] === flag && args[i + 1]) {
+      const val = parseFloat(args[i + 1]);
+      if (!isNaN(val)) return val;
+    }
+  }
+  return null;
+}
+
+const ORIGIN_LAT = parseCliCoord('--lat') ?? parseFloat(process.env.ORIGIN_LAT) || 40.437750;
+const ORIGIN_LON = parseCliCoord('--lon') ?? parseFloat(process.env.ORIGIN_LON) || -3.681861;
+const LOCATION_LABEL = NEIGHBORHOOD.replace(/_/g, ' ');
+const XLSX_PATH = join(OUTPUT_DIR, `businesses_${NEIGHBORHOOD}.xlsx`);
+const LOG_PATH = join(OUTPUT_DIR, `scraper_${NEIGHBORHOOD}.log`);
+
+// ─── API Config ────────────────────────────────────────────────────────────────
+
 const API_KEY = process.env.OUTSCRAPER_API_KEY;
-if (!API_KEY || API_KEY === '<key goes here>') {
+if (!API_KEY || API_KEY === '<your_key_here>') {
   console.error('ERROR: Set OUTSCRAPER_API_KEY in .env');
   process.exit(1);
 }
 
-const ORIGIN_LAT = 40.437750;
-const ORIGIN_LON = -3.681861;
 const BASE_URL = 'https://api.outscraper.cloud/google-maps-search';
 const POLL_URL = 'https://api.outscraper.cloud/requests';
-const BUDGET_LIMIT = 18; // $18 hard stop, $2 safety margin
+const BUDGET_LIMIT = 18;       // $18 hard stop, $2 safety margin
 const FREE_TIER = 500;
 const COST_PER_1000 = 3;
 const FETCH_TIMEOUT = 300_000; // 5 minutes
-const BATCH_DELAY = 5_000; // 5 seconds between batches
-const POLL_INTERVAL = 30_000; // 30 seconds
+const BATCH_DELAY = 5_000;     // 5 seconds between batches
+const POLL_INTERVAL = 30_000;  // 30 seconds
 const MAX_RETRIES = 3;
 
 const FIELDS = [
   'query', 'name', 'full_address', 'street', 'postal_code', 'city', 'state',
   'country', 'latitude', 'longitude', 'website', 'phone', 'type', 'category',
   'subtypes', 'rating', 'reviews', 'photos_count', 'place_id', 'google_id',
-  'working_hours', 'description', 'located_in'
+  'working_hours', 'description', 'located_in',
 ].join(',');
 
-const BATCHES = [
-  [
-    'restaurantes María de Molina Madrid',
-    'abogados María de Molina Madrid',
-    'dentistas María de Molina Madrid',
-    'clínicas María de Molina Madrid',
-    'gimnasios María de Molina Madrid',
-    'peluquerías María de Molina Madrid',
-    'ópticas María de Molina Madrid',
-    'farmacias María de Molina Madrid',
-    'veterinarios María de Molina Madrid',
-    'academias María de Molina Madrid',
-  ],
-  [
-    'hoteles María de Molina Madrid',
-    'inmobiliarias María de Molina Madrid',
-    'seguros María de Molina Madrid',
-    'gestorías María de Molina Madrid',
-    'consultoría María de Molina Madrid',
-    'agencias de viajes María de Molina Madrid',
-    'tiendas de ropa María de Molina Madrid',
-    'cafeterías María de Molina Madrid',
-    'fisioterapia María de Molina Madrid',
-    'psicólogos María de Molina Madrid',
-  ],
-  [
-    'talleres mecánicos María de Molina Madrid',
-    'arquitectos María de Molina Madrid',
-    'notarías María de Molina Madrid',
-    'empresas de limpieza María de Molina Madrid',
-    'electricistas María de Molina Madrid',
-    'fontaneros María de Molina Madrid',
-    'agencias de marketing María de Molina Madrid',
-    'contabilidad María de Molina Madrid',
-    'coworking María de Molina Madrid',
-    'clínicas dentales María de Molina Madrid',
-  ],
+// ─── Categories ────────────────────────────────────────────────────────────────
+// Spanish category keywords — location label is appended dynamically by buildBatches()
+
+const CATEGORIES = [
+  'restaurantes',
+  'abogados',
+  'dentistas',
+  'clínicas',
+  'gimnasios',
+  'peluquerías',
+  'ópticas',
+  'farmacias',
+  'veterinarios',
+  'academias',
+  'hoteles',
+  'inmobiliarias',
+  'seguros',
+  'gestorías',
+  'consultoría',
+  'agencias de viajes',
+  'tiendas de ropa',
+  'cafeterías',
+  'fisioterapia',
+  'psicólogos',
+  'talleres mecánicos',
+  'arquitectos',
+  'notarías',
+  'empresas de limpieza',
+  'electricistas',
+  'fontaneros',
+  'agencias de marketing',
+  'contabilidad',
+  'coworking',
+  'clínicas dentales',
 ];
+
+/**
+ * Splits categories into batches and appends the location label to each query.
+ * e.g. buildBatches(['restaurantes', 'abogados'], 'retiro', 2)
+ *   → [['restaurantes retiro', 'abogados retiro']]
+ */
+function buildBatches(categories, locationLabel, batchSize = 10) {
+  const batches = [];
+  for (let i = 0; i < categories.length; i += batchSize) {
+    const chunk = categories.slice(i, i + batchSize);
+    batches.push(chunk.map((cat) => `${cat} ${locationLabel}`));
+  }
+  return batches;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -106,13 +153,13 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildUrl(queries, limit = 500) {
+function buildUrl(queries, lat, lon, limit = 500) {
   const url = new URL(BASE_URL);
   for (const q of queries) {
     url.searchParams.append('query', q);
   }
   url.searchParams.set('limit', String(limit));
-  url.searchParams.set('coordinates', `${ORIGIN_LAT},${ORIGIN_LON}`);
+  url.searchParams.set('coordinates', `${lat},${lon}`);
   url.searchParams.set('dropDuplicates', 'true');
   url.searchParams.set('language', 'es');
   url.searchParams.set('region', 'ES');
@@ -147,7 +194,6 @@ async function fetchWithRetry(url, retries = MAX_RETRIES) {
         continue;
       }
       if (resp.status === 202) {
-        // Async queued — need to poll
         const body = await resp.json();
         const requestId = body.id;
         log(`202: Queued as async request ${requestId}. Polling...`);
@@ -232,28 +278,54 @@ function extractRecords(body) {
   return data.filter((item) => item && typeof item === 'object' && item.name);
 }
 
+function updateNeighborhoodTracker(neighborhood, lat, lon, stats) {
+  let tracker = {};
+  if (existsSync(TRACKER_PATH)) {
+    try {
+      tracker = JSON.parse(readFileSync(TRACKER_PATH, 'utf8'));
+    } catch {
+      log('Warning: Could not parse neighborhoods.json — starting fresh.');
+    }
+  }
+  const existing = tracker[neighborhood] || {};
+  tracker[neighborhood] = {
+    scraped_at: new Date().toISOString(),
+    lat,
+    lon,
+    total_businesses: stats.total,
+    with_website: stats.withWebsite,
+    estimated_cost_usd: parseFloat(stats.cost.toFixed(4)),
+    output_file: stats.outputFile,
+    contacts_made: existing.contacts_made ?? 0,
+  };
+  writeFileSync(TRACKER_PATH, JSON.stringify(tracker, null, 2));
+  log(`Neighborhood tracker updated: ${TRACKER_PATH}`);
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function runScraper(dryRun = false) {
   const startTime = new Date();
   log(`=== Outscraper Lead Scraper Started ===`);
-  log(`Origin: ${ORIGIN_LAT}, ${ORIGIN_LON} (María de Molina 31, Madrid)`);
+  log(`Neighborhood: ${NEIGHBORHOOD} (${LOCATION_LABEL})`);
+  log(`Origin: ${ORIGIN_LAT}, ${ORIGIN_LON}`);
   log(`Mode: ${dryRun ? 'DRY RUN' : 'FULL SCRAPE'}`);
+  log(`Output: ${XLSX_PATH}`);
 
   const allRecords = new Map(); // google_id -> record
   let cumulativeApiRecords = 0;
 
+  const batches = buildBatches(CATEGORIES, LOCATION_LABEL);
   const batchesToRun = dryRun
-    ? [[BATCHES[0][0]]] // Single query for dry run
-    : BATCHES;
-
+    ? [[batches[0][0]]] // Single query for dry run
+    : batches;
   const limitPerQuery = dryRun ? 3 : 500;
 
   for (let i = 0; i < batchesToRun.length; i++) {
     const batch = batchesToRun[i];
     log(`\n--- Batch ${i + 1}/${batchesToRun.length} (${batch.length} queries) ---`);
 
-    const url = buildUrl(batch, limitPerQuery);
+    const url = buildUrl(batch, ORIGIN_LAT, ORIGIN_LON, limitPerQuery);
     log(`Fetching: ${batch.length} queries, limit=${limitPerQuery}`);
 
     const records = await fetchWithRetry(url);
@@ -322,17 +394,15 @@ async function runScraper(dryRun = false) {
     longitude: r.longitude || '',
     google_id: r.google_id || '',
     place_id: r.place_id || '',
-    working_hours: typeof r.working_hours === 'object' ? JSON.stringify(r.working_hours) : (r.working_hours || ''),
+    working_hours: typeof r.working_hours === 'object'
+      ? JSON.stringify(r.working_hours)
+      : (r.working_hours || ''),
     description: r.description || '',
     query_source: r.query || '',
   }));
 
   const wb = XLSX.utils.book_new();
-
-  // Main sheet
   const ws = XLSX.utils.json_to_sheet(rows);
-
-  // Set column widths
   ws['!cols'] = [
     { wch: 15 }, // distance_meters
     { wch: 35 }, // name
@@ -353,25 +423,24 @@ async function runScraper(dryRun = false) {
     { wch: 50 }, // description
     { wch: 40 }, // query_source
   ];
-
   XLSX.utils.book_append_sheet(wb, ws, 'Businesses');
 
   // Summary sheet
   const endTime = new Date();
   const finalCost = estimateCost(cumulativeApiRecords);
-  const categories = [...new Set(withWebsite.map((r) => r.query || '').filter(Boolean))];
+  const queryList = [...new Set(withWebsite.map((r) => r.query || '').filter(Boolean))];
 
   const summaryData = [
+    { metric: 'Neighborhood', value: NEIGHBORHOOD },
     { metric: 'Total businesses found (with website)', value: withWebsite.length },
     { metric: 'Total unique businesses (after dedup)', value: allRecords.size },
     { metric: 'Total API records received', value: cumulativeApiRecords },
     { metric: 'Estimated API cost', value: `$${finalCost.toFixed(2)}` },
-    { metric: 'Categories scraped', value: categories.length },
-    { metric: 'Category list', value: categories.join('; ') },
+    { metric: 'Categories scraped', value: queryList.length },
+    { metric: 'Category list', value: queryList.join('; ') },
     { metric: 'Date/time of scrape', value: startTime.toISOString() },
     { metric: 'Duration', value: `${Math.round((endTime - startTime) / 1000)}s` },
     { metric: 'Origin coordinates', value: `${ORIGIN_LAT}, ${ORIGIN_LON}` },
-    { metric: 'Origin address', value: 'María de Molina 31, Madrid' },
   ];
   const summaryWs = XLSX.utils.json_to_sheet(summaryData);
   summaryWs['!cols'] = [{ wch: 35 }, { wch: 80 }];
@@ -380,8 +449,19 @@ async function runScraper(dryRun = false) {
   XLSX.writeFile(wb, XLSX_PATH);
   log(`\nXLSX written to: ${XLSX_PATH}`);
 
+  // Update neighborhood tracker (skip for dry runs)
+  if (!dryRun) {
+    updateNeighborhoodTracker(NEIGHBORHOOD, ORIGIN_LAT, ORIGIN_LON, {
+      total: allRecords.size,
+      withWebsite: withWebsite.length,
+      cost: finalCost,
+      outputFile: XLSX_PATH,
+    });
+  }
+
   // Final stats
   log(`\n=== FINAL STATS ===`);
+  log(`Neighborhood: ${NEIGHBORHOOD}`);
   log(`Total records with website: ${withWebsite.length}`);
   log(`Total unique records (all): ${allRecords.size}`);
   log(`API records received: ${cumulativeApiRecords}`);
