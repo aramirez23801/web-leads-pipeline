@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+.env.local
+
+# All generated pipeline output — never commit this
+output/
+
+# OS
+.DS_Store
+Thumbs.db
