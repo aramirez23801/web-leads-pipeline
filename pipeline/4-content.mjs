@@ -59,7 +59,8 @@ async function main() {
         score: lead.opportunity_score,
         phone: lead.phone || '',
         category: lead.category || '',
-        full_address: lead.full_address || '',
+        full_address: lead.full_address || lead.street ||
+          [lead.city, lead.postal_code].filter(Boolean).join(', ') || '',
         rating: lead.rating,
         reviews: lead.reviews,
         pitch_angle: lead.pitch_angle || '',
@@ -70,7 +71,12 @@ async function main() {
         footerText: '',
         images: [],
         colors: { bodyBg: '', headerBg: '', linkColor: '' },
-        contactInfo: { phones: [], emails: [] },
+        contactInfo: {
+          phones: [],
+          emails: lead.emails
+            ? String(lead.emails).split(',').map(e => e.trim()).filter(Boolean)
+            : [],
+        },
         logoUrl: null,
         scrapeError: null,
       };

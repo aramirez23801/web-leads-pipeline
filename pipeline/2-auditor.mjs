@@ -305,6 +305,12 @@ function buildOutputRow(biz, domainResult) {
     phone:              biz.phone ?? '',
     category:           biz.category ?? '',
     full_address:       biz.full_address ?? '',
+    street:             biz.street ?? '',
+    city:               biz.city ?? '',
+    postal_code:        biz.postal_code ?? '',
+    county:             biz.county ?? '',
+    country_code:       biz.country_code ?? '',
+    emails:             biz.emails ?? '',
     rating:             biz.rating ?? '',
     reviews:            biz.reviews ?? '',
     missing_viewport:   domainResult.missing_viewport ? 'TRUE' : 'FALSE',
@@ -335,6 +341,36 @@ function writeOutputXlsx(allRows, tierCounts, stats) {
   const wb = XLSX.utils.book_new();
 
   const ws1 = XLSX.utils.json_to_sheet(sorted);
+  ws1['!cols'] = [
+    { wch: 8  }, // tier
+    { wch: 16 }, // opportunity_score
+    { wch: 15 }, // distance_meters
+    { wch: 35 }, // name
+    { wch: 40 }, // website
+    { wch: 18 }, // phone
+    { wch: 25 }, // category
+    { wch: 50 }, // full_address
+    { wch: 40 }, // street
+    { wch: 15 }, // city
+    { wch: 12 }, // postal_code
+    { wch: 20 }, // county
+    { wch: 12 }, // country_code
+    { wch: 40 }, // emails
+    { wch: 8  }, // rating
+    { wch: 10 }, // reviews
+    { wch: 16 }, // missing_viewport
+    { wch: 8  }, // no_ssl
+    { wch: 15 }, // copyright_year
+    { wch: 18 }, // outdated_copyright
+    { wch: 12 }, // has_dead_tags
+    { wch: 20 }, // dead_tags_found
+    { wch: 12 }, // heavy_page
+    { wch: 12 }, // image_count
+    { wch: 25 }, // crawl_error
+    { wch: 40 }, // final_url
+    { wch: 25 }, // google_id
+    { wch: 60 }, // pitch_angle
+  ];
   XLSX.utils.book_append_sheet(wb, ws1, 'All Leads');
 
   const tier1 = sorted.filter(r => r.tier === 'Tier 1');

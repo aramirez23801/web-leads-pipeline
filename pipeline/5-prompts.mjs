@@ -80,7 +80,9 @@ function buildBrief(content, leadRow) {
   const name      = content.name || 'Unknown Business';
   const safeName  = content.safeName || sanitizeName(name);
   const category  = content.category  || leadRow?.category  || '';
-  const address   = content.full_address || leadRow?.full_address || '';
+  const address   = content.full_address ||
+    leadRow?.full_address || leadRow?.street ||
+    [leadRow?.city, leadRow?.postal_code].filter(Boolean).join(', ') || '—';
   const phone     = content.phone  || leadRow?.phone  || '';
   const website   = content.url    || leadRow?.website || '';
   const rating    = content.rating  ?? leadRow?.rating  ?? null;
