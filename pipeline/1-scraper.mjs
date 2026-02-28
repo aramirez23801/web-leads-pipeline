@@ -68,8 +68,8 @@ const POLL_INTERVAL = 30_000;  // 30 seconds
 const MAX_RETRIES = 3;
 
 const FIELDS = [
-  'query', 'name', 'full_address', 'street', 'postal_code', 'city', 'state',
-  'country', 'latitude', 'longitude', 'website', 'phone', 'type', 'category',
+  'query', 'name', 'address', 'street', 'county', 'postal_code', 'city', 'state',
+  'country', 'country_code', 'latitude', 'longitude', 'website', 'phone', 'type', 'category',
   'subtypes', 'rating', 'reviews', 'photos_count', 'place_id', 'google_id',
   'working_hours', 'description', 'located_in',
 ].join(',');
@@ -385,7 +385,10 @@ async function runScraper(dryRun = false) {
     phone: r.phone || '',
     category: r.category || r.type || '',
     subtypes: Array.isArray(r.subtypes) ? r.subtypes.join(', ') : (r.subtypes || ''),
-    full_address: r.full_address || '',
+    full_address: r.address || '',
+    street: r.street || '',
+    county: r.county || '',
+    country_code: r.country_code || '',
     postal_code: r.postal_code || '',
     city: r.city || '',
     rating: r.rating || '',
@@ -411,6 +414,9 @@ async function runScraper(dryRun = false) {
     { wch: 25 }, // category
     { wch: 40 }, // subtypes
     { wch: 50 }, // full_address
+    { wch: 40 }, // street
+    { wch: 20 }, // county
+    { wch: 12 }, // country_code
     { wch: 12 }, // postal_code
     { wch: 15 }, // city
     { wch: 8 },  // rating
