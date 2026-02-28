@@ -156,6 +156,9 @@ async function main() {
           };
         });
 
+        // TODO(v2): Object.assign overwrites contactInfo (including Outscraper emails).
+        // When v2 data has real emails, merge instead: preserve lead.emails as fallback
+        // if website scrape returns no emails.
         Object.assign(contentData, extracted);
 
         // Find logo using utils (skips CDN domains)
