@@ -69,7 +69,7 @@ const MAX_RETRIES = 3;
 
 const FIELDS = [
   'query', 'name', 'address', 'street', 'county', 'postal_code', 'city', 'state',
-  'country', 'country_code', 'latitude', 'longitude', 'website', 'phone', 'type', 'category',
+  'country', 'country_code', 'latitude', 'longitude', 'website', 'phone', 'emails', 'type', 'category',
   'subtypes', 'rating', 'reviews', 'photos_count', 'place_id', 'google_id',
   'working_hours', 'description', 'located_in',
 ].join(',');
@@ -164,6 +164,7 @@ function buildUrl(queries, lat, lon, limit = 500) {
   url.searchParams.set('language', 'es');
   url.searchParams.set('region', 'ES');
   url.searchParams.set('async', 'false');
+  url.searchParams.set('domains_service', 'true');
   url.searchParams.set('fields', FIELDS);
   return url.toString();
 }
@@ -383,6 +384,7 @@ async function runScraper(dryRun = false) {
     name: r.name || '',
     website: r.website || '',
     phone: r.phone || '',
+    emails: Array.isArray(r.emails) ? r.emails.join(', ') : (r.emails || ''),
     category: r.category || r.type || '',
     subtypes: Array.isArray(r.subtypes) ? r.subtypes.join(', ') : (r.subtypes || ''),
     full_address: r.address || '',
@@ -411,6 +413,7 @@ async function runScraper(dryRun = false) {
     { wch: 35 }, // name
     { wch: 40 }, // website
     { wch: 18 }, // phone
+    { wch: 40 }, // emails
     { wch: 25 }, // category
     { wch: 40 }, // subtypes
     { wch: 50 }, // full_address
