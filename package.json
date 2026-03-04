@@ -1,7 +1,7 @@
 {
   "name": "outscraper-leads",
   "version": "1.0.0",
-  "description": "Local business lead generation pipeline — scrape, audit, screenshot, brief, postcard",
+  "description": "Local business lead generation pipeline — scrape, audit, screenshot, brief, mockdesign, email outreach",
   "main": "index.js",
   "scripts": {
     "scrape": "node pipeline/1-scraper.mjs",
@@ -11,8 +11,13 @@
     "screenshot": "node pipeline/3-screenshot.mjs",
     "content": "node pipeline/4-content.mjs",
     "briefs": "node pipeline/5-prompts.mjs",
-    "postcards": "node pipeline/6-postcards.mjs",
-    "pipeline": "npm run scrape && npm run audit && npm run screenshot && npm run content && npm run briefs && npm run postcards"
+    "mockdesign": "node pipeline/6-mockdesign.mjs",
+    "htmltopng": "node pipeline/7-htmltopng.mjs",
+    "emailcontent": "node pipeline/8-emailcontent.mjs",
+    "emailcontent:dry": "node pipeline/8-emailcontent.mjs --dry-run",
+    "deploy": "node pipeline/9-deploy.mjs",
+    "deploy:dry": "node pipeline/9-deploy.mjs --dry-run",
+    "pipeline": "npm run scrape && npm run audit && npm run screenshot && npm run content && npm run briefs && npm run mockdesign && npm run htmltopng && npm run emailcontent && npm run deploy"
   },
   "keywords": [],
   "author": "",
