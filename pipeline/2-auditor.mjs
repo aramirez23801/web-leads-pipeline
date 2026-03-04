@@ -168,7 +168,9 @@ async function analyzeHtml(html, finalUrl) {
     if (!latestCopyrightYear || y > latestCopyrightYear) latestCopyrightYear = y;
   }
 
-  const rangePattern = /(?:©|&copy;|copyright)?\s*(?:19|20)\d{2}\s*[-–—]\s*((?:19|20)\d{2})/gi;
+  // Note: copyright symbol is required (no ?) to avoid false positives on year ranges
+  // that appear in body text unrelated to copyright (e.g. "2019-2024 season stats").
+  const rangePattern = /(?:©|&copy;|copyright)\s*(?:19|20)\d{2}\s*[-–—]\s*((?:19|20)\d{2})/gi;
   for (const m of combinedText.matchAll(rangePattern)) {
     const y = parseInt(m[1], 10);
     if (!latestCopyrightYear || y > latestCopyrightYear) latestCopyrightYear = y;

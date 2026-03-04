@@ -156,10 +156,16 @@ async function main() {
           };
         });
 
-        // TODO(v2): Object.assign overwrites contactInfo (including Outscraper emails).
-        // When v2 data has real emails, merge instead: preserve lead.emails as fallback
-        // if website scrape returns no emails.
-        Object.assign(contentData, extracted);
+        // Merge scraped data while preserving Outscraper emails.
+        // Object.assign would overwrite contactInfo entirely — instead merge email lists
+        // so Outscraper emails (domains_service) and website-scraped emails both survive.
+        const mergedEmails = [
+          ...(contentData.contactInfo.emails || []),
+          ...(extracted.contactInfo?.emails || []),
+        ].filter(Boolean);
+        const { contactInfo: _extracted_contact, ...rest } = extracted;
+        Object.assign(contentData, rest);
+        contentData.contactInfo.emails = [...new Set(mergedEmails)];
 
         // Find logo using utils (skips CDN domains)
         const logoImg = findLogo(extracted.images);
