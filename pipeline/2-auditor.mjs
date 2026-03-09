@@ -2,19 +2,21 @@
 // Crawls business websites, applies technical filters, scores & tiers leads.
 //
 // Usage:
-//   node pipeline/2-auditor.mjs [--neighborhood <name>] [<limit>]
-//   node pipeline/2-auditor.mjs -n retiro 10   # audit retiro, first 10 domains
+//   node pipeline/2-auditor.mjs [--neighborhood <name>] [--limit <n>] [--force]
+//   node pipeline/2-auditor.mjs -n retiro --limit 10   # audit retiro, first 10 domains
+//   node pipeline/2-auditor.mjs --force                # bypass cache (re-crawl everything)
 //
 // Input:  output/businesses_{neighborhood}.xlsx
 // Output: output/leads_audited_{neighborhood}.xlsx
 //         output/outreach_{neighborhood}.xlsx
 // Cache:  output/crawl_cache_{neighborhood}.json
+// Log:    output/auditor_{neighborhood}.log
 
 import 'dotenv/config';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'fs';
 import { load } from 'cheerio';
 import pLimit from 'p-limit';
-import XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { getNeighborhoodName } from './utils.mjs';
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -23,36 +25,65 @@ const INPUT_FILE    = `output/businesses_${NEIGHBORHOOD}.xlsx`;
 const OUTPUT_FILE   = `output/leads_audited_${NEIGHBORHOOD}.xlsx`;
 const OUTREACH_FILE = `output/outreach_${NEIGHBORHOOD}.xlsx`;
 const CACHE_FILE    = `output/crawl_cache_${NEIGHBORHOOD}.json`;
+const LOG_FILE      = `output/auditor_${NEIGHBORHOOD}.log`;
 const CONCURRENCY   = 5;
 const DELAY_MS      = 200;
 const TIMEOUT_MS    = 15000;
 
-// Parse optional numeric limit argument (skip flag names and their values)
-function getDryRunLimit() {
+// Parse CLI flags
+function parseCli() {
   const args = process.argv.slice(2);
+  let limit = 0;
+  let force = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--neighborhood' || a === '-n') { i++; continue; }
-    if (/^\d+$/.test(a)) return parseInt(a, 10);
+    if ((a === '--limit' || a === '-l') && args[i + 1]) { limit = parseInt(args[++i], 10); continue; }
+    if (a === '--force') { force = true; continue; }
+    // Legacy: bare number as positional limit argument
+    if (/^\d+$/.test(a)) { limit = parseInt(a, 10); continue; }
   }
-  return 0;
+  return { limit, force };
 }
-const DRY_RUN_LIMIT = getDryRunLimit();
+const { limit: LIMIT, force: FORCE_CACHE } = parseCli();
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
+// ── Logger ───────────────────────────────────────────────────────────────────
+function log(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  console.log(line);
+  appendFileSync(LOG_FILE, line + '\n');
+}
+
 // ── Step 1: Read the XLSX ───────────────────────────────────────────────────
-function readInputXlsx() {
+async function readInputXlsx() {
   if (!existsSync(INPUT_FILE)) {
     console.error(`[ERROR] Input file not found: ${INPUT_FILE}`);
     console.error(`        Run the scraper first: node pipeline/1-scraper.mjs --neighborhood ${NEIGHBORHOOD}`);
     process.exit(1);
   }
-  const wb = XLSX.readFile(INPUT_FILE);
-  const ws = wb.Sheets['Businesses'];
-  if (!ws) throw new Error('Sheet "Businesses" not found in input XLSX');
-  const rows = XLSX.utils.sheet_to_json(ws);
-  console.log(`[INIT] Read ${rows.length} rows from ${INPUT_FILE}`);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(INPUT_FILE);
+  const worksheet = workbook.getWorksheet('Businesses');
+  if (!worksheet) throw new Error('Sheet "Businesses" not found in input XLSX');
+
+  const headers = [];
+  const rows = [];
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) {
+      // row.values is 1-indexed; index 0 is undefined
+      headers.push(...row.values.slice(1));
+      return;
+    }
+    const obj = {};
+    headers.forEach((header, i) => {
+      if (header) obj[header] = row.getCell(i + 1).value ?? null;
+    });
+    rows.push(obj);
+  });
+
+  log(`[INIT] Read ${rows.length} rows from ${INPUT_FILE}`);
   return rows;
 }
 
@@ -96,6 +127,7 @@ function deduplicateByDomain(businesses) {
 async function crawlUrl(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const fetchStart = Date.now();
 
   try {
     const response = await fetch(url, {
@@ -107,46 +139,48 @@ async function crawlUrl(url) {
       },
       redirect: 'follow',
     });
+    const response_time_ms = Date.now() - fetchStart;
     clearTimeout(timer);
 
     const finalUrl = response.url;
     const status = response.status;
 
     if (status < 200 || status >= 400) {
-      return { crawl_error: `http_${status}`, final_url: finalUrl, html: null, status };
+      return { crawl_error: `http_${status}`, final_url: finalUrl, html: null, status, response_time_ms };
     }
 
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) {
-      return { crawl_error: 'not_html', final_url: finalUrl, html: null, status };
+      return { crawl_error: 'not_html', final_url: finalUrl, html: null, status, response_time_ms };
     }
 
     const html = await response.text();
-    return { crawl_error: null, final_url: finalUrl, html, status };
+    return { crawl_error: null, final_url: finalUrl, html, status, response_time_ms };
   } catch (err) {
     clearTimeout(timer);
+    const response_time_ms = Date.now() - fetchStart;
     const msg = err.message || String(err);
     if (err.name === 'AbortError' || msg.includes('aborted')) {
-      return { crawl_error: 'timeout', final_url: url, html: null, status: null };
+      return { crawl_error: 'timeout', final_url: url, html: null, status: null, response_time_ms };
     }
     if (msg.includes('ENOTFOUND') || msg.includes('getaddrinfo')) {
-      return { crawl_error: 'dns_fail', final_url: url, html: null, status: null };
+      return { crawl_error: 'dns_fail', final_url: url, html: null, status: null, response_time_ms };
     }
     if (msg.includes('ECONNREFUSED')) {
-      return { crawl_error: 'connection_refused', final_url: url, html: null, status: null };
+      return { crawl_error: 'connection_refused', final_url: url, html: null, status: null, response_time_ms };
     }
     if (msg.includes('ECONNRESET') || msg.includes('socket hang up')) {
-      return { crawl_error: 'connection_reset', final_url: url, html: null, status: null };
+      return { crawl_error: 'connection_reset', final_url: url, html: null, status: null, response_time_ms };
     }
     if (msg.includes('CERT') || msg.includes('SSL') || msg.includes('certificate')) {
-      return { crawl_error: 'ssl_error', final_url: url, html: null, status: null };
+      return { crawl_error: 'ssl_error', final_url: url, html: null, status: null, response_time_ms };
     }
-    return { crawl_error: msg.substring(0, 120), final_url: url, html: null, status: null };
+    return { crawl_error: msg.substring(0, 120), final_url: url, html: null, status: null, response_time_ms };
   }
 }
 
 // ── Step 5: Apply the filters ───────────────────────────────────────────────
-async function analyzeHtml(html, finalUrl) {
+function analyzeHtml(html, finalUrl) {
   const $ = load(html);
 
   // FILTER 1: Missing viewport
@@ -286,26 +320,30 @@ function logProgress(idx, total, hostname, result) {
   const score = result.opportunity_score;
   const tier  = result.tier;
   if (result.crawl_error) {
-    console.log(`[${idx}/${total}] ✗ ${hostname} — ERROR: ${result.crawl_error} → Score: ${score} (Tier ${tier})`);
+    log(`[${idx}/${total}] ✗ ${hostname} — ERROR: ${result.crawl_error} → Score: ${score} (Tier ${tier})`);
   } else {
-    const vp = result.missing_viewport ? 'MISSING' : 'OK';
+    const vp  = result.missing_viewport ? 'MISSING' : 'OK';
     const ssl = result.no_ssl ? 'MISSING' : 'OK';
     const cr  = result.copyright_year || 'N/A';
     const dt  = result.dead_tags_found || 'NONE';
-    console.log(`[${idx}/${total}] ✓ ${hostname} — viewport:${vp} ssl:${ssl} copyright:${cr} dead_tags:${dt} → Score: ${score} (Tier ${tier})`);
+    const ms  = result.response_time_ms != null ? `${result.response_time_ms}ms` : 'N/A';
+    log(`[${idx}/${total}] ✓ ${hostname} — viewport:${vp} ssl:${ssl} copyright:${cr} dead_tags:${dt} response:${ms} → Score: ${score} (Tier ${tier})`);
   }
 }
 
 // ── Build output row ────────────────────────────────────────────────────────
 function buildOutputRow(biz, domainResult) {
   return {
+    // Scoring
     tier:               `Tier ${domainResult.tier}`,
     opportunity_score:  domainResult.opportunity_score,
+    // Stage 1 identity fields
     distance_meters:    biz.distance_meters ?? '',
     name:               biz.name ?? '',
     website:            biz._cleaned_url ?? biz.website ?? '',
     phone:              biz.phone ?? '',
     category:           biz.category ?? '',
+    subtypes:           biz.subtypes ?? '',
     full_address:       biz.full_address ?? '',
     street:             biz.street ?? '',
     city:               biz.city ?? '',
@@ -315,6 +353,17 @@ function buildOutputRow(biz, domainResult) {
     emails:             biz.emails ?? '',
     rating:             biz.rating ?? '',
     reviews:            biz.reviews ?? '',
+    verified:           biz.verified ?? '',
+    photos_count:       biz.photos_count ?? '',
+    located_in:         biz.located_in ?? '',
+    latitude:           biz.latitude ?? '',
+    longitude:          biz.longitude ?? '',
+    place_id:           biz.place_id ?? '',
+    google_id:          biz.google_id ?? '',
+    business_status:    biz.business_status ?? '',
+    description:        biz.description ?? '',
+    working_hours:      biz.working_hours ?? '',
+    // Crawl analysis
     missing_viewport:   domainResult.missing_viewport ? 'TRUE' : 'FALSE',
     no_ssl:             domainResult.no_ssl ? 'TRUE' : 'FALSE',
     copyright_year:     domainResult.copyright_year ?? 'not found',
@@ -323,15 +372,19 @@ function buildOutputRow(biz, domainResult) {
     dead_tags_found:    domainResult.dead_tags_found ?? '',
     heavy_page:         domainResult.heavy_page ? 'TRUE' : 'FALSE',
     image_count:        domainResult.image_count ?? 0,
+    response_time_ms:   domainResult.response_time_ms ?? '',
     crawl_error:        domainResult.crawl_error ?? '',
     final_url:          domainResult.final_url ?? '',
-    google_id:          biz.google_id ?? '',
+    // Reserved for v2 LLM visual scoring (always null until implemented)
+    design_score:       null,
+    design_weakness:    null,
+    // Pitch
     pitch_angle:        domainResult.pitch_angle ?? '',
   };
 }
 
 // ── Write main audited XLSX ─────────────────────────────────────────────────
-function writeOutputXlsx(allRows, tierCounts, stats) {
+async function writeOutputXlsx(allRows, tierCounts, stats) {
   const sorted = [...allRows].sort((a, b) => {
     const scoreDiff = (b.opportunity_score || 0) - (a.opportunity_score || 0);
     if (scoreDiff !== 0) return scoreDiff;
@@ -340,143 +393,161 @@ function writeOutputXlsx(allRows, tierCounts, stats) {
     return dA - dB;
   });
 
-  const wb = XLSX.utils.book_new();
-
-  const ws1 = XLSX.utils.json_to_sheet(sorted);
-  ws1['!cols'] = [
-    { wch: 8  }, // tier
-    { wch: 16 }, // opportunity_score
-    { wch: 15 }, // distance_meters
-    { wch: 35 }, // name
-    { wch: 40 }, // website
-    { wch: 18 }, // phone
-    { wch: 25 }, // category
-    { wch: 50 }, // full_address
-    { wch: 40 }, // street
-    { wch: 15 }, // city
-    { wch: 12 }, // postal_code
-    { wch: 20 }, // county
-    { wch: 12 }, // country_code
-    { wch: 40 }, // emails
-    { wch: 8  }, // rating
-    { wch: 10 }, // reviews
-    { wch: 16 }, // missing_viewport
-    { wch: 8  }, // no_ssl
-    { wch: 15 }, // copyright_year
-    { wch: 18 }, // outdated_copyright
-    { wch: 12 }, // has_dead_tags
-    { wch: 20 }, // dead_tags_found
-    { wch: 12 }, // heavy_page
-    { wch: 12 }, // image_count
-    { wch: 25 }, // crawl_error
-    { wch: 40 }, // final_url
-    { wch: 25 }, // google_id
-    { wch: 60 }, // pitch_angle
+  const LEAD_COLUMNS = [
+    { header: 'tier',               key: 'tier',               width: 8  },
+    { header: 'opportunity_score',  key: 'opportunity_score',  width: 16 },
+    { header: 'distance_meters',    key: 'distance_meters',    width: 15 },
+    { header: 'name',               key: 'name',               width: 35 },
+    { header: 'website',            key: 'website',            width: 40 },
+    { header: 'phone',              key: 'phone',              width: 18 },
+    { header: 'category',           key: 'category',           width: 25 },
+    { header: 'subtypes',           key: 'subtypes',           width: 30 },
+    { header: 'full_address',       key: 'full_address',       width: 50 },
+    { header: 'street',             key: 'street',             width: 40 },
+    { header: 'city',               key: 'city',               width: 15 },
+    { header: 'postal_code',        key: 'postal_code',        width: 12 },
+    { header: 'county',             key: 'county',             width: 20 },
+    { header: 'country_code',       key: 'country_code',       width: 12 },
+    { header: 'emails',             key: 'emails',             width: 40 },
+    { header: 'rating',             key: 'rating',             width: 8  },
+    { header: 'reviews',            key: 'reviews',            width: 10 },
+    { header: 'verified',           key: 'verified',           width: 10 },
+    { header: 'photos_count',       key: 'photos_count',       width: 12 },
+    { header: 'located_in',         key: 'located_in',         width: 25 },
+    { header: 'latitude',           key: 'latitude',           width: 12 },
+    { header: 'longitude',          key: 'longitude',          width: 12 },
+    { header: 'place_id',           key: 'place_id',           width: 30 },
+    { header: 'google_id',          key: 'google_id',          width: 25 },
+    { header: 'business_status',    key: 'business_status',    width: 18 },
+    { header: 'description',        key: 'description',        width: 60 },
+    { header: 'working_hours',      key: 'working_hours',      width: 40 },
+    { header: 'missing_viewport',   key: 'missing_viewport',   width: 16 },
+    { header: 'no_ssl',             key: 'no_ssl',             width: 8  },
+    { header: 'copyright_year',     key: 'copyright_year',     width: 15 },
+    { header: 'outdated_copyright', key: 'outdated_copyright', width: 18 },
+    { header: 'has_dead_tags',      key: 'has_dead_tags',      width: 12 },
+    { header: 'dead_tags_found',    key: 'dead_tags_found',    width: 20 },
+    { header: 'heavy_page',         key: 'heavy_page',         width: 12 },
+    { header: 'image_count',        key: 'image_count',        width: 12 },
+    { header: 'response_time_ms',   key: 'response_time_ms',   width: 16 },
+    { header: 'crawl_error',        key: 'crawl_error',        width: 25 },
+    { header: 'final_url',          key: 'final_url',          width: 40 },
+    { header: 'design_score',       key: 'design_score',       width: 12 },
+    { header: 'design_weakness',    key: 'design_weakness',    width: 50 },
+    { header: 'pitch_angle',        key: 'pitch_angle',        width: 60 },
   ];
-  XLSX.utils.book_append_sheet(wb, ws1, 'All Leads');
 
-  const tier1 = sorted.filter(r => r.tier === 'Tier 1');
-  const ws2 = XLSX.utils.json_to_sheet(tier1.length > 0 ? tier1 : [{}]);
-  XLSX.utils.book_append_sheet(wb, ws2, 'Tier 1 Hot Leads');
+  const workbook = new ExcelJS.Workbook();
 
-  const tier2 = sorted.filter(r => r.tier === 'Tier 2');
-  const ws3 = XLSX.utils.json_to_sheet(tier2.length > 0 ? tier2 : [{}]);
-  XLSX.utils.book_append_sheet(wb, ws3, 'Tier 2 Warm Leads');
+  const ws1 = workbook.addWorksheet('All Leads');
+  ws1.columns = LEAD_COLUMNS;
+  ws1.addRows(sorted);
 
-  const summary = [
-    { metric: 'Total businesses audited',   value: stats.totalBusinesses },
+  const ws2 = workbook.addWorksheet('Tier 1 Hot Leads');
+  ws2.columns = LEAD_COLUMNS.map(c => ({ ...c }));
+  ws2.addRows(sorted.filter(r => r.tier === 'Tier 1'));
+
+  const ws3 = workbook.addWorksheet('Tier 2 Warm Leads');
+  ws3.columns = LEAD_COLUMNS.map(c => ({ ...c }));
+  ws3.addRows(sorted.filter(r => r.tier === 'Tier 2'));
+
+  const ws4 = workbook.addWorksheet('Summary');
+  ws4.columns = [
+    { header: 'Metric', key: 'metric', width: 35 },
+    { header: 'Value',  key: 'value',  width: 20 },
+  ];
+  ws4.addRows([
+    { metric: 'Total businesses audited',    value: stats.totalBusinesses },
     { metric: 'Total unique domains crawled', value: stats.totalDomains },
-    { metric: 'Crawl success rate',          value: `${stats.successRate}%` },
-    { metric: 'Tier 1 (HOT) count',          value: tierCounts[1] || 0 },
-    { metric: 'Tier 2 (WARM) count',         value: tierCounts[2] || 0 },
-    { metric: 'Tier 3 (COOL) count',         value: tierCounts[3] || 0 },
-    { metric: 'Tier 4 (SKIP) count',         value: tierCounts[4] || 0 },
-    { metric: 'Crawl errors count',          value: stats.errorCount },
-    { metric: 'Date/time of audit',          value: new Date().toISOString() },
-    { metric: 'Average opportunity score',   value: stats.avgScore },
-  ];
-  const ws4 = XLSX.utils.json_to_sheet(summary);
-  XLSX.utils.book_append_sheet(wb, ws4, 'Summary');
+    { metric: 'Cache hits (skipped)',         value: stats.cacheHits },
+    { metric: 'Crawl success rate',           value: `${stats.successRate}%` },
+    { metric: 'Tier 1 (HOT) count',           value: tierCounts[1] || 0 },
+    { metric: 'Tier 2 (WARM) count',          value: tierCounts[2] || 0 },
+    { metric: 'Tier 3 (COOL) count',          value: tierCounts[3] || 0 },
+    { metric: 'Tier 4 (SKIP) count',          value: tierCounts[4] || 0 },
+    { metric: 'Crawl errors count',           value: stats.errorCount },
+    { metric: 'Date/time of audit',           value: new Date().toISOString() },
+    { metric: 'Average opportunity score',    value: stats.avgScore },
+  ]);
 
-  XLSX.writeFile(wb, OUTPUT_FILE);
-  console.log(`\n[DONE] Audited XLSX written to ${OUTPUT_FILE}`);
+  await workbook.xlsx.writeFile(OUTPUT_FILE);
+  log(`[DONE] Audited XLSX written to ${OUTPUT_FILE}`);
 }
 
 // ── Write outreach XLSX ─────────────────────────────────────────────────────
-function writeOutreachXlsx(allRows) {
+async function writeOutreachXlsx(allRows) {
   const outreachRows = allRows
     .filter(r => r.tier === 'Tier 1' || r.tier === 'Tier 2')
     .sort((a, b) => (b.opportunity_score || 0) - (a.opportunity_score || 0));
 
-  const outreachData = outreachRows.map((r, i) => ({
-    '#':            i + 1,
-    Tier:           r.tier,
-    Score:          r.opportunity_score,
-    Business:       r.name,
-    Phone:          r.phone,
-    Category:       r.category,
-    Address:        r.full_address,
-    Distance_m:     r.distance_meters,
-    Rating:         r.rating,
-    Reviews:        r.reviews,
-    Website:        r.website,
-    'Main Problem': r.pitch_angle,
-    Contacted:      '',
-    Notes:          '',
-  }));
-
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(outreachData.length > 0 ? outreachData : [{}]);
-
-  ws['!cols'] = [
-    { wch: 4  }, // #
-    { wch: 8  }, // Tier
-    { wch: 6  }, // Score
-    { wch: 30 }, // Business
-    { wch: 16 }, // Phone
-    { wch: 22 }, // Category
-    { wch: 35 }, // Address
-    { wch: 10 }, // Distance_m
-    { wch: 7  }, // Rating
-    { wch: 9  }, // Reviews
-    { wch: 35 }, // Website
-    { wch: 60 }, // Main Problem
-    { wch: 12 }, // Contacted
-    { wch: 25 }, // Notes
+  const workbook = new ExcelJS.Workbook();
+  const ws = workbook.addWorksheet('Outreach List');
+  ws.columns = [
+    { header: '#',            key: 'num',          width: 4  },
+    { header: 'Tier',         key: 'tier',         width: 8  },
+    { header: 'Score',        key: 'score',        width: 6  },
+    { header: 'Business',     key: 'name',         width: 30 },
+    { header: 'Phone',        key: 'phone',        width: 16 },
+    { header: 'Category',     key: 'category',     width: 22 },
+    { header: 'Address',      key: 'address',      width: 35 },
+    { header: 'Distance_m',   key: 'distance_m',   width: 10 },
+    { header: 'Rating',       key: 'rating',       width: 7  },
+    { header: 'Reviews',      key: 'reviews',      width: 9  },
+    { header: 'Website',      key: 'website',      width: 35 },
+    { header: 'Main Problem', key: 'main_problem', width: 60 },
+    { header: 'Contacted',    key: 'contacted',    width: 12 },
+    { header: 'Notes',        key: 'notes',        width: 25 },
   ];
 
-  XLSX.utils.book_append_sheet(wb, ws, 'Outreach List');
-  XLSX.writeFile(wb, OUTREACH_FILE);
-  console.log(`[DONE] Outreach XLSX written to ${OUTREACH_FILE} (${outreachRows.length} leads)`);
+  ws.addRows(outreachRows.map((r, i) => ({
+    num:          i + 1,
+    tier:         r.tier,
+    score:        r.opportunity_score,
+    name:         r.name,
+    phone:        r.phone,
+    category:     r.category,
+    address:      r.full_address,
+    distance_m:   r.distance_meters,
+    rating:       r.rating,
+    reviews:      r.reviews,
+    website:      r.website,
+    main_problem: r.pitch_angle,
+    contacted:    '',
+    notes:        '',
+  })));
+
+  await workbook.xlsx.writeFile(OUTREACH_FILE);
+  log(`[DONE] Outreach XLSX written to ${OUTREACH_FILE} (${outreachRows.length} leads)`);
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
 async function main() {
   const startTime = Date.now();
-  console.log(`[INIT] Neighborhood: ${NEIGHBORHOOD}`);
+  log(`[INIT] Neighborhood: ${NEIGHBORHOOD}`);
+  if (FORCE_CACHE) log('[INIT] --force: cache bypassed, all domains will be re-crawled');
 
   // Step 1: Read input
-  const rows = readInputXlsx();
+  const rows = await readInputXlsx();
 
   // Steps 2-3: Normalize + deduplicate
   const domainMap = deduplicateByDomain(rows);
   let domains = [...domainMap.entries()]; // [hostname, { url, businesses }]
-  console.log(`[INIT] ${rows.length} businesses → ${domains.length} unique domains to crawl`);
+  log(`[INIT] ${rows.length} businesses → ${domains.length} unique domains to crawl`);
 
-  if (DRY_RUN_LIMIT > 0) {
-    domains = domains.slice(0, DRY_RUN_LIMIT);
-    console.log(`[DRY RUN] Limiting to ${DRY_RUN_LIMIT} domains`);
+  if (LIMIT > 0) {
+    domains = domains.slice(0, LIMIT);
+    log(`[LIMIT] Limiting to first ${LIMIT} domains`);
   }
 
   // Load cache for resume capability
-  const cache = loadCache();
-  const cachedCount = domains.filter(([h]) => cache.has(h)).length;
-  if (cachedCount > 0) {
-    console.log(`[CACHE] Found ${cachedCount} cached results, will skip those domains`);
+  const cache = FORCE_CACHE ? new Map() : loadCache();
+  const cacheHits = FORCE_CACHE ? 0 : domains.filter(([h]) => cache.has(h)).length;
+  if (cacheHits > 0) {
+    log(`[CACHE] Found ${cacheHits} cached results, will skip those domains`);
   }
 
   // Steps 4-5: Crawl + analyze
-  const limit = pLimit(CONCURRENCY);
+  const limiter = pLimit(CONCURRENCY);
   const total = domains.length;
   let processed = 0;
   const tierCounts = { 1: 0, 2: 0, 3: 0, 4: 0 };
@@ -484,7 +555,7 @@ async function main() {
   let cacheSaveChain = Promise.resolve();
 
   const crawlTasks = domains.map(([hostname, { url, businesses }]) =>
-    limit(async () => {
+    limiter(async () => {
       // Return cached result if available
       if (cache.has(hostname)) {
         const cached = cache.get(hostname);
@@ -508,16 +579,19 @@ async function main() {
         dead_tags_found:    '',
         heavy_page:         false,
         image_count:        0,
+        response_time_ms:   null,
       };
 
       if (crawlResult.html) {
-        analysis = await analyzeHtml(crawlResult.html, crawlResult.final_url);
+        analysis = analyzeHtml(crawlResult.html, crawlResult.final_url);
+        analysis.response_time_ms = crawlResult.response_time_ms;
       }
 
       const result = {
         ...analysis,
-        crawl_error: crawlResult.crawl_error,
-        final_url:   crawlResult.final_url,
+        crawl_error:      crawlResult.crawl_error,
+        final_url:        crawlResult.final_url,
+        response_time_ms: crawlResult.response_time_ms,
       };
 
       // Score + tier using review count from the first business in this group
@@ -539,7 +613,7 @@ async function main() {
       }
 
       if (processed % 50 === 0) {
-        console.log(`--- Progress: ${processed}/${total} | T1:${tierCounts[1]||0} T2:${tierCounts[2]||0} T3:${tierCounts[3]||0} T4:${tierCounts[4]||0} | ${errorCount} errors ---`);
+        log(`--- Progress: ${processed}/${total} | T1:${tierCounts[1]||0} T2:${tierCounts[2]||0} T3:${tierCounts[3]||0} T4:${tierCounts[4]||0} | ${errorCount} errors ---`);
       }
 
       return [hostname, result];
@@ -557,7 +631,7 @@ async function main() {
   const allRows = [];
   for (const [hostname, { businesses }] of domainMap) {
     const domainResult = resultMap.get(hostname);
-    if (!domainResult) continue; // skipped in dry run
+    if (!domainResult) continue; // skipped by --limit
     for (const biz of businesses) {
       allRows.push(buildOutputRow(biz, domainResult));
     }
@@ -572,36 +646,38 @@ async function main() {
   const stats = {
     totalBusinesses: allRows.length,
     totalDomains:    total,
+    cacheHits,
     successRate,
     errorCount,
     avgScore,
   };
 
-  writeOutputXlsx(allRows, tierCounts, stats);
-  writeOutreachXlsx(allRows);
+  await writeOutputXlsx(allRows, tierCounts, stats);
+  await writeOutreachXlsx(allRows);
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-  console.log('\n═══════════════════════════════════════════');
-  console.log('  WEBSITE AUDIT COMPLETE');
-  console.log('═══════════════════════════════════════════');
-  console.log(`  Neighborhood:        ${NEIGHBORHOOD}`);
-  console.log(`  Businesses audited:  ${allRows.length}`);
-  console.log(`  Unique domains:      ${total}`);
-  console.log(`  Crawl success rate:  ${successRate}%`);
-  console.log(`  Average score:       ${avgScore}`);
-  console.log('───────────────────────────────────────────');
-  console.log(`  Tier 1 (HOT):   ${tierCounts[1] || 0}`);
-  console.log(`  Tier 2 (WARM):  ${tierCounts[2] || 0}`);
-  console.log(`  Tier 3 (COOL):  ${tierCounts[3] || 0}`);
-  console.log(`  Tier 4 (SKIP):  ${tierCounts[4] || 0}`);
-  console.log(`  Crawl errors:   ${errorCount}`);
-  console.log('───────────────────────────────────────────');
-  console.log(`  Duration:        ${elapsed}s`);
-  console.log(`  Output:          ${OUTPUT_FILE}`);
-  console.log(`  Outreach:        ${OUTREACH_FILE}`);
-  console.log(`  Cache:           ${CACHE_FILE}`);
-  console.log('═══════════════════════════════════════════');
-  console.log(`[INFO] Crawl cache saved at ${CACHE_FILE} for resume capability`);
+  log('\n═══════════════════════════════════════════');
+  log('  WEBSITE AUDIT COMPLETE');
+  log('═══════════════════════════════════════════');
+  log(`  Neighborhood:        ${NEIGHBORHOOD}`);
+  log(`  Businesses audited:  ${allRows.length}`);
+  log(`  Unique domains:      ${total}`);
+  log(`  Cache hits:          ${cacheHits}`);
+  log(`  Crawl success rate:  ${successRate}%`);
+  log(`  Average score:       ${avgScore}`);
+  log('───────────────────────────────────────────');
+  log(`  Tier 1 (HOT):   ${tierCounts[1] || 0}`);
+  log(`  Tier 2 (WARM):  ${tierCounts[2] || 0}`);
+  log(`  Tier 3 (COOL):  ${tierCounts[3] || 0}`);
+  log(`  Tier 4 (SKIP):  ${tierCounts[4] || 0}`);
+  log(`  Crawl errors:   ${errorCount}`);
+  log('───────────────────────────────────────────');
+  log(`  Duration:        ${elapsed}s`);
+  log(`  Output:          ${OUTPUT_FILE}`);
+  log(`  Outreach:        ${OUTREACH_FILE}`);
+  log(`  Cache:           ${CACHE_FILE}`);
+  log(`  Log:             ${LOG_FILE}`);
+  log('═══════════════════════════════════════════');
 }
 
 main().catch(err => {
