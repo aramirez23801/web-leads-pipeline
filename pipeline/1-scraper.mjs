@@ -8,13 +8,25 @@
  *   # 2. Override neighborhood via CLI flags:
  *   node pipeline/1-scraper.mjs --neighborhood retiro --lat 40.4153 --lon -3.6844
  *
- *   # 3. Dry run (single query, 3 results, no tracker update):
+ *   # 3. Dry run (single query, 3 results, no tracker update, domains_service disabled):
  *   node pipeline/1-scraper.mjs --dry-run
  *   node pipeline/1-scraper.mjs --neighborhood retiro --lat 40.4153 --lon -3.6844 --dry-run
+ *
+ * Output schema (businesses_{neighborhood}.xlsx, sheet "Businesses"):
+ *   distance_meters, name, website, phone, emails (JSON array), category, subtypes,
+ *   full_address, street, county, country_code, postal_code, city, rating, reviews,
+ *   latitude, longitude, google_id, place_id, business_status, verified, photos_count,
+ *   located_in, working_hours, description, query_source
+ *
+ * NOTE: emails is stored as a JSON array string (e.g. '["a@b.com","c@d.com"]').
+ *       Downstream stages must parse with JSON.parse().
+ *
+ * NOTE: description is the Google Maps business description. Stages 5 and 8 should
+ *       incorporate this field for richer personalization.
  */
 
 import 'dotenv/config';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { writeFileSync, readFileSync, appendFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -59,20 +71,29 @@ if (!API_KEY || API_KEY === '<your_key_here>') {
 
 const BASE_URL = 'https://api.outscraper.cloud/google-maps-search';
 const POLL_URL = 'https://api.outscraper.cloud/requests';
-const BUDGET_LIMIT = 18;       // $18 hard stop, $2 safety margin
-const FREE_TIER = 500;
+const BUDGET_LIMIT = 18;       // $18 hard stop ($2 safety margin below $20 target)
+const FREE_TIER = 500;         // Free records per month — estimate only; actual usage may differ
 const COST_PER_1000 = 3;
 const FETCH_TIMEOUT = 300_000; // 5 minutes
-const BATCH_DELAY = 5_000;     // 5 seconds between batches
+const BATCH_DELAY = 5_000;     // 5 seconds between batches (Outscraper rate limit headroom)
 const POLL_INTERVAL = 30_000;  // 30 seconds
 const MAX_RETRIES = 3;
 
+// Both 'address' (short) and 'full_address' (complete) are requested — we prefer
+// full_address and fall back to address in the row mapping below.
 const FIELDS = [
-  'query', 'name', 'address', 'street', 'county', 'postal_code', 'city', 'state',
+  'query', 'name', 'address', 'full_address', 'street', 'county', 'postal_code', 'city', 'state',
   'country', 'country_code', 'latitude', 'longitude', 'website', 'phone', 'emails', 'type', 'category',
   'subtypes', 'rating', 'reviews', 'photos_count', 'place_id', 'google_id',
-  'working_hours', 'description', 'located_in',
+  'working_hours', 'description', 'located_in', 'business_status', 'verified',
 ].join(',');
+
+// Businesses whose only web presence is a social media profile are filtered out —
+// we cannot scrape or build a mockup from a social page.
+const SOCIAL_DOMAINS = [
+  'facebook.com', 'instagram.com', 'twitter.com', 'x.com',
+  'linkedin.com', 'tiktok.com', 'youtube.com', 'pinterest.com',
+];
 
 // ─── Categories ────────────────────────────────────────────────────────────────
 // Spanish category keywords — location label is appended dynamically by buildBatches()
@@ -153,7 +174,19 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildUrl(queries, lat, lon, limit = 500) {
+/**
+ * Returns true if the given URL belongs to a social media domain.
+ */
+function isSocialMediaUrl(url) {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    return SOCIAL_DOMAINS.some((d) => hostname === d || hostname.endsWith('.' + d));
+  } catch {
+    return false;
+  }
+}
+
+function buildUrl(queries, lat, lon, limit = 500, withDomainsService = true) {
   const url = new URL(BASE_URL);
   for (const q of queries) {
     url.searchParams.append('query', q);
@@ -164,7 +197,7 @@ function buildUrl(queries, lat, lon, limit = 500) {
   url.searchParams.set('language', 'es');
   url.searchParams.set('region', 'ES');
   url.searchParams.set('async', 'false');
-  url.searchParams.set('domains_service', 'true');
+  url.searchParams.set('domains_service', String(withDomainsService));
   url.searchParams.set('fields', FIELDS);
   return url.toString();
 }
@@ -191,8 +224,11 @@ async function fetchWithRetry(url, retries = MAX_RETRIES) {
       }
       if (resp.status === 429) {
         log(`429: Rate limited. Attempt ${attempt}/${retries}. Waiting 60s...`);
-        await sleep(60_000);
-        continue;
+        if (attempt < retries) {
+          await sleep(60_000);
+          continue;
+        }
+        throw new Error(`Rate limited: exhausted all ${retries} retries on HTTP 429`);
       }
       if (resp.status === 202) {
         const body = await resp.json();
@@ -219,11 +255,13 @@ async function fetchWithRetry(url, retries = MAX_RETRIES) {
           await sleep(60_000);
           continue;
         }
+        throw new Error(`Timeout: exhausted all ${retries} retries`);
       }
       throw err;
     }
   }
-  return [];
+  // Should never be reached — all paths above return, throw, or continue.
+  throw new Error('fetchWithRetry: unexpected exit from retry loop');
 }
 
 async function pollForResults(requestId) {
@@ -313,28 +351,41 @@ async function runScraper(dryRun = false) {
   log(`Mode: ${dryRun ? 'DRY RUN' : 'FULL SCRAPE'}`);
   log(`Output: ${XLSX_PATH}`);
 
-  const allRecords = new Map(); // google_id -> record
+  const allRecords = new Map(); // google_id/place_id/fallback -> record
   let cumulativeApiRecords = 0;
+  let batchFailures = 0;
 
   const batches = buildBatches(CATEGORIES, LOCATION_LABEL);
   const batchesToRun = dryRun
     ? [[batches[0][0]]] // Single query for dry run
     : batches;
   const limitPerQuery = dryRun ? 3 : 500;
+  // Dry-run disables domains_service — it costs money and isn't needed for a smoke test.
+  const withDomainsService = !dryRun;
 
   for (let i = 0; i < batchesToRun.length; i++) {
     const batch = batchesToRun[i];
-    log(`\n--- Batch ${i + 1}/${batchesToRun.length} (${batch.length} queries) ---`);
+    log(`\n--- Batch ${i + 1}/${batchesToRun.length} ---`);
+    log(`Queries: ${batch.join(' | ')}`);
 
-    const url = buildUrl(batch, ORIGIN_LAT, ORIGIN_LON, limitPerQuery);
-    log(`Fetching: ${batch.length} queries, limit=${limitPerQuery}`);
+    const url = buildUrl(batch, ORIGIN_LAT, ORIGIN_LON, limitPerQuery, withDomainsService);
 
-    const records = await fetchWithRetry(url);
+    let records = [];
+    try {
+      records = await fetchWithRetry(url);
+    } catch (err) {
+      batchFailures++;
+      log(`BATCH ${i + 1} FAILED (failure #${batchFailures}): ${err.message}. Continuing with next batch.`);
+      continue;
+    }
+
     cumulativeApiRecords += records.length;
 
     let newCount = 0;
     for (const record of records) {
-      const key = record.google_id || record.place_id || `${record.name}_${record.full_address}`;
+      // Use record.address (the raw API field) for the fallback dedup key.
+      // full_address is only available after the XLSX row mapping — not here.
+      const key = record.google_id || record.place_id || `${record.name}_${record.address}`;
       if (!allRecords.has(key)) {
         allRecords.set(key, record);
         newCount++;
@@ -357,16 +408,44 @@ async function runScraper(dryRun = false) {
     }
   }
 
-  // Filter for businesses with websites
-  const withWebsite = [];
-  for (const record of allRecords.values()) {
-    if (record.website && record.website.trim() !== '') {
-      withWebsite.push(record);
-    }
+  if (batchFailures > 0) {
+    log(`\nWARNING: ${batchFailures} batch(es) failed — some leads may be missing from output.`);
   }
-  log(`\nFiltered: ${withWebsite.length} businesses with websites (from ${allRecords.size} total)`);
 
-  // Calculate distance and sort
+  // ── Filter 1: Remove closed businesses ──────────────────────────────────────
+  // Possible values: OPERATIONAL, CLOSED_TEMPORARILY, CLOSED_PERMANENTLY.
+  // Records with no status are assumed OPERATIONAL (field may not always be returned).
+  const openRecords = [];
+  let closedCount = 0;
+  for (const record of allRecords.values()) {
+    const status = (record.business_status || 'OPERATIONAL').toUpperCase();
+    if (status === 'CLOSED_PERMANENTLY' || status === 'CLOSED_TEMPORARILY') {
+      closedCount++;
+      continue;
+    }
+    openRecords.push(record);
+  }
+  log(`\nClosed businesses removed: ${closedCount} (${openRecords.length} open remaining)`);
+
+  // ── Filter 2: Require a real business website (not social media) ─────────────
+  const withWebsite = [];
+  let noWebsiteCount = 0;
+  let socialOnlyCount = 0;
+  for (const record of openRecords) {
+    if (!record.website || record.website.trim() === '') {
+      noWebsiteCount++;
+      continue;
+    }
+    if (isSocialMediaUrl(record.website)) {
+      socialOnlyCount++;
+      log(`Skipping social media URL: ${record.website} (${record.name})`);
+      continue;
+    }
+    withWebsite.push(record);
+  }
+  log(`Website filter: ${withWebsite.length} kept | ${noWebsiteCount} no-website | ${socialOnlyCount} social-media-only`);
+
+  // ── Distance calculation and sort ────────────────────────────────────────────
   for (const record of withWebsite) {
     const lat = parseFloat(record.latitude);
     const lon = parseFloat(record.longitude);
@@ -378,61 +457,74 @@ async function runScraper(dryRun = false) {
   }
   withWebsite.sort((a, b) => a.distance_meters - b.distance_meters);
 
-  // Build XLSX
+  // ── Build rows ───────────────────────────────────────────────────────────────
   const rows = withWebsite.map((r) => ({
     distance_meters: r.distance_meters,
-    name: r.name || '',
-    website: r.website || '',
-    phone: r.phone || '',
-    emails: Array.isArray(r.emails) ? r.emails.join(', ') : (r.emails || ''),
-    category: r.category || r.type || '',
-    subtypes: Array.isArray(r.subtypes) ? r.subtypes.join(', ') : (r.subtypes || ''),
-    full_address: r.address || '',
-    street: r.street || '',
-    county: r.county || '',
-    country_code: r.country_code || '',
-    postal_code: r.postal_code || '',
-    city: r.city || '',
-    rating: r.rating || '',
-    reviews: r.reviews || '',
-    latitude: r.latitude || '',
-    longitude: r.longitude || '',
-    google_id: r.google_id || '',
-    place_id: r.place_id || '',
-    working_hours: typeof r.working_hours === 'object'
+    name:            r.name || '',
+    website:         r.website || '',
+    phone:           r.phone || '',
+    // emails: JSON array string — downstream stages must use JSON.parse()
+    emails:          JSON.stringify(Array.isArray(r.emails) ? r.emails : r.emails ? [r.emails] : []),
+    category:        r.category || r.type || '',
+    subtypes:        Array.isArray(r.subtypes) ? r.subtypes.join(', ') : (r.subtypes || ''),
+    // Prefer Outscraper's full_address field (complete); fall back to address (short)
+    full_address:    r.full_address || r.address || '',
+    street:          r.street || '',
+    county:          r.county || '',
+    country_code:    r.country_code || '',
+    postal_code:     r.postal_code || '',
+    city:            r.city || '',
+    rating:          r.rating || '',
+    reviews:         r.reviews || '',
+    latitude:        r.latitude || '',
+    longitude:       r.longitude || '',
+    google_id:       r.google_id || '',
+    place_id:        r.place_id || '',
+    business_status: r.business_status || 'OPERATIONAL',
+    verified:        r.verified ?? false,
+    photos_count:    r.photos_count ?? 0,
+    located_in:      r.located_in || '',
+    working_hours:   typeof r.working_hours === 'object'
       ? JSON.stringify(r.working_hours)
       : (r.working_hours || ''),
-    description: r.description || '',
-    query_source: r.query || '',
+    // Google Maps business description — stages 5 & 8 should use this for personalization
+    description:     r.description || '',
+    query_source:    r.query || '',
   }));
 
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [
-    { wch: 15 }, // distance_meters
-    { wch: 35 }, // name
-    { wch: 40 }, // website
-    { wch: 18 }, // phone
-    { wch: 40 }, // emails
-    { wch: 25 }, // category
-    { wch: 40 }, // subtypes
-    { wch: 50 }, // full_address
-    { wch: 40 }, // street
-    { wch: 20 }, // county
-    { wch: 12 }, // country_code
-    { wch: 12 }, // postal_code
-    { wch: 15 }, // city
-    { wch: 8 },  // rating
-    { wch: 10 }, // reviews
-    { wch: 12 }, // latitude
-    { wch: 12 }, // longitude
-    { wch: 25 }, // google_id
-    { wch: 25 }, // place_id
-    { wch: 40 }, // working_hours
-    { wch: 50 }, // description
-    { wch: 40 }, // query_source
+  // ── Write XLSX (exceljs) ─────────────────────────────────────────────────────
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Businesses');
+  ws.columns = [
+    { header: 'distance_meters', key: 'distance_meters', width: 15 },
+    { header: 'name',            key: 'name',            width: 35 },
+    { header: 'website',         key: 'website',         width: 40 },
+    { header: 'phone',           key: 'phone',           width: 18 },
+    { header: 'emails',          key: 'emails',          width: 40 },
+    { header: 'category',        key: 'category',        width: 25 },
+    { header: 'subtypes',        key: 'subtypes',        width: 40 },
+    { header: 'full_address',    key: 'full_address',    width: 50 },
+    { header: 'street',          key: 'street',          width: 40 },
+    { header: 'county',          key: 'county',          width: 20 },
+    { header: 'country_code',    key: 'country_code',    width: 12 },
+    { header: 'postal_code',     key: 'postal_code',     width: 12 },
+    { header: 'city',            key: 'city',            width: 15 },
+    { header: 'rating',          key: 'rating',          width: 8  },
+    { header: 'reviews',         key: 'reviews',         width: 10 },
+    { header: 'latitude',        key: 'latitude',        width: 12 },
+    { header: 'longitude',       key: 'longitude',       width: 12 },
+    { header: 'google_id',       key: 'google_id',       width: 25 },
+    { header: 'place_id',        key: 'place_id',        width: 25 },
+    { header: 'business_status', key: 'business_status', width: 18 },
+    { header: 'verified',        key: 'verified',        width: 10 },
+    { header: 'photos_count',    key: 'photos_count',    width: 12 },
+    { header: 'located_in',      key: 'located_in',      width: 30 },
+    { header: 'working_hours',   key: 'working_hours',   width: 40 },
+    { header: 'description',     key: 'description',     width: 50 },
+    { header: 'query_source',    key: 'query_source',    width: 40 },
   ];
-  XLSX.utils.book_append_sheet(wb, ws, 'Businesses');
+  ws.getRow(1).font = { bold: true };
+  ws.addRows(rows);
 
   // Summary sheet
   const endTime = new Date();
@@ -440,22 +532,31 @@ async function runScraper(dryRun = false) {
   const queryList = [...new Set(withWebsite.map((r) => r.query || '').filter(Boolean))];
 
   const summaryData = [
-    { metric: 'Neighborhood', value: NEIGHBORHOOD },
-    { metric: 'Total businesses found (with website)', value: withWebsite.length },
-    { metric: 'Total unique businesses (after dedup)', value: allRecords.size },
-    { metric: 'Total API records received', value: cumulativeApiRecords },
-    { metric: 'Estimated API cost', value: `$${finalCost.toFixed(2)}` },
-    { metric: 'Categories scraped', value: queryList.length },
-    { metric: 'Category list', value: queryList.join('; ') },
-    { metric: 'Date/time of scrape', value: startTime.toISOString() },
-    { metric: 'Duration', value: `${Math.round((endTime - startTime) / 1000)}s` },
-    { metric: 'Origin coordinates', value: `${ORIGIN_LAT}, ${ORIGIN_LON}` },
+    { metric: 'Neighborhood',                           value: NEIGHBORHOOD },
+    { metric: 'Businesses kept (open + real website)',  value: withWebsite.length },
+    { metric: 'Total unique businesses (after dedup)',  value: allRecords.size },
+    { metric: 'Closed businesses removed',              value: closedCount },
+    { metric: 'Social-media-only websites removed',     value: socialOnlyCount },
+    { metric: 'No website (removed)',                   value: noWebsiteCount },
+    { metric: 'Total API records received',             value: cumulativeApiRecords },
+    { metric: 'Batch failures',                         value: batchFailures },
+    { metric: 'Estimated API cost',                     value: `$${finalCost.toFixed(2)}` },
+    { metric: 'Categories with results',                value: queryList.length },
+    { metric: 'Category list',                          value: queryList.join('; ') },
+    { metric: 'Date/time of scrape',                    value: startTime.toISOString() },
+    { metric: 'Duration',                               value: `${Math.round((endTime - startTime) / 1000)}s` },
+    { metric: 'Origin coordinates',                     value: `${ORIGIN_LAT}, ${ORIGIN_LON}` },
   ];
-  const summaryWs = XLSX.utils.json_to_sheet(summaryData);
-  summaryWs['!cols'] = [{ wch: 35 }, { wch: 80 }];
-  XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
 
-  XLSX.writeFile(wb, XLSX_PATH);
+  const summaryWs = wb.addWorksheet('Summary');
+  summaryWs.columns = [
+    { header: 'metric', key: 'metric', width: 40 },
+    { header: 'value',  key: 'value',  width: 80 },
+  ];
+  summaryWs.getRow(1).font = { bold: true };
+  summaryWs.addRows(summaryData);
+
+  await wb.xlsx.writeFile(XLSX_PATH);
   log(`\nXLSX written to: ${XLSX_PATH}`);
 
   // Update neighborhood tracker (skip for dry runs)
@@ -469,14 +570,21 @@ async function runScraper(dryRun = false) {
   }
 
   // Final stats
-  log(`\n=== FINAL STATS ===`);
-  log(`Neighborhood: ${NEIGHBORHOOD}`);
-  log(`Total records with website: ${withWebsite.length}`);
-  log(`Total unique records (all): ${allRecords.size}`);
-  log(`API records received: ${cumulativeApiRecords}`);
-  log(`Estimated cost: $${finalCost.toFixed(2)}`);
-  log(`File: ${XLSX_PATH}`);
-  log(`Duration: ${Math.round((endTime - startTime) / 1000)}s`);
+  log(`\n${'═'.repeat(50)}`);
+  log(`Neighborhood:          ${NEIGHBORHOOD}`);
+  log(`Businesses kept:       ${withWebsite.length}`);
+  log(`  Closed removed:      ${closedCount}`);
+  log(`  Social-only removed: ${socialOnlyCount}`);
+  log(`  No-website removed:  ${noWebsiteCount}`);
+  log(`Total unique (all):    ${allRecords.size}`);
+  log(`API records received:  ${cumulativeApiRecords}`);
+  log(`Batch failures:        ${batchFailures}`);
+  log(`Estimated cost:        $${finalCost.toFixed(2)}`);
+  log(`File:                  ${XLSX_PATH}`);
+  log(`Duration:              ${Math.round((endTime - startTime) / 1000)}s`);
+  if (batchFailures > 0) {
+    log(`WARNING: ${batchFailures} batch(es) failed — re-run to recover missing leads.`);
+  }
 
   return { total: withWebsite.length, cost: finalCost, path: XLSX_PATH };
 }
