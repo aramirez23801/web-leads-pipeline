@@ -16,6 +16,13 @@
  *   node pipeline/1-scraper.mjs --category dentistas
  *   node pipeline/1-scraper.mjs --category "agencias de marketing" --dry-run
  *
+ * Neighborhood registry (neighborhoods.json):
+ *   Coordinates are stored in neighborhoods.json — NOT in .env.
+ *   First run for a new neighborhood requires --lat and --lon to register it:
+ *     node pipeline/1-scraper.mjs --neighborhood retiro --lat 40.4153 --lon -3.6844
+ *   Subsequent runs only need --neighborhood — coords are read from the registry:
+ *     node pipeline/1-scraper.mjs --neighborhood retiro
+ *
  * Output schema (businesses_{neighborhood}.xlsx, sheet "Businesses"):
  *   distance_meters, name, website, phone, emails (JSON array), category, subtypes,
  *   full_address, street, county, country_code, postal_code, city, rating, reviews,
@@ -47,19 +54,21 @@ mkdirSync(OUTPUT_DIR, { recursive: true });
 
 const NEIGHBORHOOD = getNeighborhoodName();
 
-// Parse --lat / --lon from CLI (not in utils since it's scraper-specific)
+// ─── CLI Argument Parsers ──────────────────────────────────────────────────────
+
 function parseCliCoord(flag) {
   const args = process.argv;
   for (let i = 2; i < args.length; i++) {
     if (args[i] === flag && args[i + 1]) {
       const val = parseFloat(args[i + 1]);
       if (!isNaN(val)) return val;
+      console.error(`ERROR: ${flag} value "${args[i + 1]}" is not a valid number.`);
+      process.exit(1);
     }
   }
   return null;
 }
 
-// Parse --category flag for single-category re-scrape
 function parseCategoryFilter() {
   const args = process.argv;
   for (let i = 2; i < args.length; i++) {
@@ -68,21 +77,45 @@ function parseCategoryFilter() {
   return null;
 }
 
-// Validate a coordinate value from the environment — fail fast on non-numeric strings
-// (parseFloat of a blank or garbage string gives NaN, which the || fallback won't catch)
-function parseEnvCoord(envValue, fallback) {
-  if (!envValue) return fallback;
-  const val = parseFloat(envValue);
-  if (isNaN(val)) {
-    console.error(`ERROR: Invalid coordinate value "${envValue}" — must be a number.`);
-    process.exit(1);
+// ─── Neighborhood Registry ────────────────────────────────────────────────────
+// Coordinates live in neighborhoods.json, not in .env.
+// --lat / --lon are only needed when registering a neighborhood for the first time.
+
+function loadRegistry() {
+  if (!existsSync(TRACKER_PATH)) return {};
+  try {
+    return JSON.parse(readFileSync(TRACKER_PATH, 'utf8'));
+  } catch {
+    console.error('WARNING: Could not parse neighborhoods.json — starting with empty registry.');
+    return {};
   }
-  return val;
 }
 
-const ORIGIN_LAT = parseCliCoord('--lat') ?? parseEnvCoord(process.env.ORIGIN_LAT, 40.437750);
-const ORIGIN_LON = parseCliCoord('--lon') ?? parseEnvCoord(process.env.ORIGIN_LON, -3.681861);
 const CATEGORY_FILTER = parseCategoryFilter();
+const CLI_LAT = parseCliCoord('--lat');
+const CLI_LON = parseCliCoord('--lon');
+const registry = loadRegistry();
+const registryEntry = registry[NEIGHBORHOOD];
+
+let ORIGIN_LAT, ORIGIN_LON;
+
+if (CLI_LAT !== null && CLI_LON !== null) {
+  // CLI coords provided — use them (first-time registration or explicit override)
+  ORIGIN_LAT = CLI_LAT;
+  ORIGIN_LON = CLI_LON;
+  if (registryEntry) {
+    console.log(`[INFO] Overriding stored coords for "${NEIGHBORHOOD}" with CLI values.`);
+  }
+} else if (registryEntry?.lat && registryEntry?.lon) {
+  // Known neighborhood — load coords from registry
+  ORIGIN_LAT = registryEntry.lat;
+  ORIGIN_LON = registryEntry.lon;
+} else {
+  console.error(`ERROR: Neighborhood "${NEIGHBORHOOD}" not found in neighborhoods.json.`);
+  console.error(`       Register it with:`);
+  console.error(`       node pipeline/1-scraper.mjs --neighborhood ${NEIGHBORHOOD} --lat <lat> --lon <lon>`);
+  process.exit(1);
+}
 const LOCATION_LABEL = NEIGHBORHOOD.replace(/_/g, ' ');
 const XLSX_PATH = join(OUTPUT_DIR, `businesses_${NEIGHBORHOOD}.xlsx`);
 const LOG_PATH = join(OUTPUT_DIR, `scraper_${NEIGHBORHOOD}.log`);
@@ -358,30 +391,35 @@ function extractRecords(body) {
   return data.filter((item) => item && typeof item === 'object' && item.name);
 }
 
-function updateNeighborhoodTracker(neighborhood, lat, lon, stats) {
-  let tracker = {};
-  if (existsSync(TRACKER_PATH)) {
-    try {
-      tracker = JSON.parse(readFileSync(TRACKER_PATH, 'utf8'));
-    } catch {
-      log('Warning: Could not parse neighborhoods.json — starting fresh.');
-    }
-  }
-  const existing = tracker[neighborhood] || {};
+function updateNeighborhoodRegistry(neighborhood, lat, lon, displayName, stats) {
+  const reg = loadRegistry();
+  const existing = reg[neighborhood] || {};
   const projectRoot = join(__dirname, '..');
-  tracker[neighborhood] = {
+
+  // Append this run to the history — never overwrite previous runs
+  const runs = existing.runs || [];
+  runs.push({
     scraped_at: new Date().toISOString(),
-    lat,
-    lon,
     total_businesses: stats.total,
     with_website: stats.withWebsite,
     estimated_cost_usd: parseFloat(stats.cost.toFixed(4)),
-    // Stored as relative path so neighborhoods.json is portable across machines
+    // Relative path — portable across machines and future admin dashboard
     output_file: relative(projectRoot, stats.outputFile),
+    batch_failures: stats.batchFailures,
+  });
+
+  reg[neighborhood] = {
+    display_name: displayName,
+    lat,
+    lon,
+    city: existing.city || '',
+    country: existing.country || 'ES',
+    runs,
     contacts_made: existing.contacts_made ?? 0,
   };
-  writeFileSync(TRACKER_PATH, JSON.stringify(tracker, null, 2));
-  log(`Neighborhood tracker updated: ${TRACKER_PATH}`);
+
+  writeFileSync(TRACKER_PATH, JSON.stringify(reg, null, 2));
+  log(`Neighborhood registry updated: ${TRACKER_PATH} (${runs.length} total run(s) recorded)`);
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -618,13 +656,14 @@ async function runScraper(dryRun = false) {
   await wb.xlsx.writeFile(XLSX_PATH);
   log(`\nXLSX written to: ${XLSX_PATH}`);
 
-  // Update neighborhood tracker (skip for dry runs)
+  // Update neighborhood registry (skip for dry runs)
   if (!dryRun) {
-    updateNeighborhoodTracker(NEIGHBORHOOD, ORIGIN_LAT, ORIGIN_LON, {
+    updateNeighborhoodRegistry(NEIGHBORHOOD, ORIGIN_LAT, ORIGIN_LON, LOCATION_LABEL, {
       total: allRecords.size,
       withWebsite: withWebsite.length,
       cost: finalCost,
       outputFile: XLSX_PATH,
+      batchFailures,
     });
   }
 

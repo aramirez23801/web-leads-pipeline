@@ -1,12 +1,20 @@
 {
   "maria_de_molina": {
-    "scraped_at": "2026-02-23T12:39:16.275Z",
+    "display_name": "María de Molina",
     "lat": 40.43775,
     "lon": -3.681861,
-    "total_businesses": 1594,
-    "with_website": 1227,
-    "estimated_cost_usd": 3.627,
-    "output_file": "/Users/andres/web-leads-pipeline/output/businesses_maria_de_molina.xlsx",
+    "city": "Madrid",
+    "country": "ES",
+    "runs": [
+      {
+        "scraped_at": "2026-02-23T12:39:16.275Z",
+        "total_businesses": 1594,
+        "with_website": 1227,
+        "estimated_cost_usd": 3.627,
+        "output_file": "output/businesses_maria_de_molina.xlsx",
+        "batch_failures": 0
+      }
+    ],
     "contacts_made": 0
   }
 }
