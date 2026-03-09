@@ -12,6 +12,10 @@
  *   node pipeline/1-scraper.mjs --dry-run
  *   node pipeline/1-scraper.mjs --neighborhood retiro --lat 40.4153 --lon -3.6844 --dry-run
  *
+ *   # 4. Single category (re-scrape or test one category without a full run):
+ *   node pipeline/1-scraper.mjs --category dentistas
+ *   node pipeline/1-scraper.mjs --category "agencias de marketing" --dry-run
+ *
  * Output schema (businesses_{neighborhood}.xlsx, sheet "Businesses"):
  *   distance_meters, name, website, phone, emails (JSON array), category, subtypes,
  *   full_address, street, county, country_code, postal_code, city, rating, reviews,
@@ -28,7 +32,7 @@
 import 'dotenv/config';
 import ExcelJS from 'exceljs';
 import { writeFileSync, readFileSync, appendFileSync, mkdirSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { getNeighborhoodName } from './utils.mjs';
 
@@ -55,8 +59,30 @@ function parseCliCoord(flag) {
   return null;
 }
 
-const ORIGIN_LAT = (parseCliCoord('--lat') ?? parseFloat(process.env.ORIGIN_LAT)) || 40.437750;
-const ORIGIN_LON = (parseCliCoord('--lon') ?? parseFloat(process.env.ORIGIN_LON)) || -3.681861;
+// Parse --category flag for single-category re-scrape
+function parseCategoryFilter() {
+  const args = process.argv;
+  for (let i = 2; i < args.length; i++) {
+    if (args[i] === '--category' && args[i + 1]) return args[i + 1].toLowerCase();
+  }
+  return null;
+}
+
+// Validate a coordinate value from the environment — fail fast on non-numeric strings
+// (parseFloat of a blank or garbage string gives NaN, which the || fallback won't catch)
+function parseEnvCoord(envValue, fallback) {
+  if (!envValue) return fallback;
+  const val = parseFloat(envValue);
+  if (isNaN(val)) {
+    console.error(`ERROR: Invalid coordinate value "${envValue}" — must be a number.`);
+    process.exit(1);
+  }
+  return val;
+}
+
+const ORIGIN_LAT = parseCliCoord('--lat') ?? parseEnvCoord(process.env.ORIGIN_LAT, 40.437750);
+const ORIGIN_LON = parseCliCoord('--lon') ?? parseEnvCoord(process.env.ORIGIN_LON, -3.681861);
+const CATEGORY_FILTER = parseCategoryFilter();
 const LOCATION_LABEL = NEIGHBORHOOD.replace(/_/g, ' ');
 const XLSX_PATH = join(OUTPUT_DIR, `businesses_${NEIGHBORHOOD}.xlsx`);
 const LOG_PATH = join(OUTPUT_DIR, `scraper_${NEIGHBORHOOD}.log`);
@@ -99,36 +125,51 @@ const SOCIAL_DOMAINS = [
 // Spanish category keywords — location label is appended dynamically by buildBatches()
 
 const CATEGORIES = [
+  // Food & hospitality
   'restaurantes',
+  'cafeterías',
+  'hoteles',
+  // Legal & finance
   'abogados',
+  'notarías',
+  'gestorías',
+  'contabilidad',
+  'seguros',
+  // Health & wellness
   'dentistas',
   'clínicas',
-  'gimnasios',
-  'peluquerías',
-  'ópticas',
-  'farmacias',
-  'veterinarios',
-  'academias',
-  'hoteles',
-  'inmobiliarias',
-  'seguros',
-  'gestorías',
-  'consultoría',
-  'agencias de viajes',
-  'tiendas de ropa',
-  'cafeterías',
+  'clínicas dentales',
   'fisioterapia',
+  'clínicas de fisioterapia',
   'psicólogos',
-  'talleres mecánicos',
+  'centros médicos',
+  'farmacias',
+  'ópticas',
+  'veterinarios',
+  // Beauty & fitness
+  'peluquerías',
+  'centros de estética',
+  'gimnasios',
+  // Real estate & construction
+  'inmobiliarias',
   'arquitectos',
-  'notarías',
-  'empresas de limpieza',
   'electricistas',
   'fontaneros',
+  'cerrajeros',
+  'empresas de limpieza',
+  // Business services
+  'consultoría',
   'agencias de marketing',
-  'contabilidad',
   'coworking',
-  'clínicas dentales',
+  // Education
+  'academias',
+  'guarderías',
+  // Retail & travel
+  'tiendas de ropa',
+  'tiendas de informática',
+  'agencias de viajes',
+  // Transport
+  'talleres mecánicos',
 ];
 
 /**
@@ -327,6 +368,7 @@ function updateNeighborhoodTracker(neighborhood, lat, lon, stats) {
     }
   }
   const existing = tracker[neighborhood] || {};
+  const projectRoot = join(__dirname, '..');
   tracker[neighborhood] = {
     scraped_at: new Date().toISOString(),
     lat,
@@ -334,7 +376,8 @@ function updateNeighborhoodTracker(neighborhood, lat, lon, stats) {
     total_businesses: stats.total,
     with_website: stats.withWebsite,
     estimated_cost_usd: parseFloat(stats.cost.toFixed(4)),
-    output_file: stats.outputFile,
+    // Stored as relative path so neighborhoods.json is portable across machines
+    output_file: relative(projectRoot, stats.outputFile),
     contacts_made: existing.contacts_made ?? 0,
   };
   writeFileSync(TRACKER_PATH, JSON.stringify(tracker, null, 2));
@@ -355,7 +398,19 @@ async function runScraper(dryRun = false) {
   let cumulativeApiRecords = 0;
   let batchFailures = 0;
 
-  const batches = buildBatches(CATEGORIES, LOCATION_LABEL);
+  // Apply --category filter if provided
+  const categoriesToRun = CATEGORY_FILTER
+    ? CATEGORIES.filter((c) => c.toLowerCase().includes(CATEGORY_FILTER))
+    : CATEGORIES;
+  if (CATEGORY_FILTER && categoriesToRun.length === 0) {
+    log(`ERROR: No category matches "${CATEGORY_FILTER}". Available:\n  ${CATEGORIES.join('\n  ')}`);
+    process.exit(1);
+  }
+  if (CATEGORY_FILTER) {
+    log(`Category filter: "${CATEGORY_FILTER}" → ${categoriesToRun.length} match(es): ${categoriesToRun.join(', ')}`);
+  }
+
+  const batches = buildBatches(categoriesToRun, LOCATION_LABEL);
   const batchesToRun = dryRun
     ? [[batches[0][0]]] // Single query for dry run
     : batches;
@@ -444,6 +499,10 @@ async function runScraper(dryRun = false) {
     withWebsite.push(record);
   }
   log(`Website filter: ${withWebsite.length} kept | ${noWebsiteCount} no-website | ${socialOnlyCount} social-media-only`);
+
+  // Log which address field Outscraper actually returned — confirms full_address vs address fallback
+  const fullAddressCount = withWebsite.filter((r) => r.full_address).length;
+  log(`Address field: ${fullAddressCount}/${withWebsite.length} records have full_address (${withWebsite.length - fullAddressCount} fall back to address)`);
 
   // ── Distance calculation and sort ────────────────────────────────────────────
   for (const record of withWebsite) {

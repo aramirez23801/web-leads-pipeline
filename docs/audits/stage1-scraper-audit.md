@@ -382,6 +382,60 @@ Any additions should be deliberate.
 
 ---
 
+## Decisions Log
+
+| # | Issue | Decision | Status |
+|---|---|---|---|
+| 1 | No `business_status` filter | Fix in stage 1 | ✅ Done (commit 1) |
+| 2 | Social media URLs pass through | Fix in stage 1 | ✅ Done (commit 1) |
+| 3 | Dedup fallback key bug | Fix in stage 1 | ✅ Done (commit 1) |
+| 4 | Silent batch failure | Fix in stage 1 | ✅ Done (commit 1) |
+| 5 | `emails` as comma-joined string | Fix in stage 1 (JSON array); stage 4 must be updated to parse | ✅ Done (commit 1) — ⚠️ stage 4 pending |
+| 6 | `business_status`/`verified`/`photos_count` not saved | Fix in stage 1 | ✅ Done (commit 1) |
+| 7 | `address` vs `full_address` confusion | Request both; prefer full_address; log which was used | ✅ Done (commit 2) |
+| 8 | Google Maps `description` not downstream | Already saved correctly in stage 1. Connect in stages 5 and 8 | ✅ Saved — ⚠️ stages 5+8 pending |
+| 9 | `xlsx` HIGH CVE | Migrate to `exceljs` in stage 1 | ✅ Done (commit 1) |
+| 10 | Pagination (500 cap per category) | Needs Outscraper API docs verification before implementing. Skip for now | ⏳ Deferred |
+| 11 | `working_hours` never used downstream | Keep — useful for HTML mockup (stage 6) and design brief (stage 5) | ⚠️ Stages 5+6 pending |
+| 12 | `ORIGIN_LAT`/`ORIGIN_LON` not validated as numbers | Add NaN guard at startup | ✅ Done (commit 2) |
+| 13 | Query strings not logged per batch | Log actual queries | ✅ Done (commit 1) |
+| 14 | Category list gaps | Add: centros de estética, cerrajeros, centros médicos, clínicas de fisioterapia, guarderías, tiendas de informática | ✅ Done (commit 2) |
+| 15 | No `--category` flag | Implement for single-category re-scrape | ✅ Done (commit 2) |
+| 16 | Output folder overwrites on re-run | Restructure ALL stages' output dirs — cross-cutting change, defer to pre-admin-tool migration | ⏳ Deferred (all stages) |
+| 17 | `output_file` absolute path in tracker | Store as relative path | ✅ Done (commit 2) |
+| 18 | Dead deps: `pdf-lib`, `@pdf-lib/fontkit` | Remove from package.json | ⏳ Pending |
+
+## Cross-cutting items (not stage 1 specific)
+
+### Output folder restructure (affects all stages)
+Agreed to restructure output directory to preserve runs and support future admin tool.
+Proposed structure — implement as a single migration after all stages are audited:
+```
+output/
+  {neighborhood}/
+    scrapes/
+      {YYYY-MM-DD_HHmmss}/    ← each scrape preserved, never overwritten
+        businesses.xlsx        ← stage 1
+        leads_audited.xlsx     ← stage 2
+        crawl_cache.json       ← stage 2
+        scraper.log
+    leads/
+      {business_name}/         ← per-lead data (stages 3–9), shared across scrapes
+        content.json
+        email.json
+        mockdesign.html
+        ...
+    latest.json                ← pointer to most recent scrape folder
+```
+
+### Items to fix when auditing downstream stages
+- **Stage 4:** `emails` field is now a JSON array string — update email merge logic to use `JSON.parse()` instead of comma-split
+- **Stage 5:** Use `description` (Google Maps) and `working_hours` fields from XLSX for richer design brief
+- **Stage 6:** Use `working_hours` in HTML mockup (show real business hours)
+- **Stage 8:** Use `description` (Google Maps) for more specific email copy
+
+---
+
 ## Recommended Changes (to discuss before implementation)
 
 **High priority:**
