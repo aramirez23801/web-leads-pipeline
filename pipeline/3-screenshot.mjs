@@ -9,7 +9,8 @@
 // Output: output/screenshots_{neighborhood}/{safeName}_mobile.png   (full page, max 6000px)
 //         output/screenshots_{neighborhood}/{safeName}_desktop.png  (full page, max 5000px)
 //         output/screenshots_{neighborhood}/manifest.json
-//         output/screenshots_{neighborhood}/errors.log
+//         output/screenshots_{neighborhood}/errors.log              (errors only)
+//         output/screenshot_{neighborhood}.log                      (full run log)
 
 import 'dotenv/config';
 import puppeteer from 'puppeteer';
@@ -21,6 +22,7 @@ import { sanitizeName, getNeighborhoodName, getTargetLeads } from './utils.mjs';
 const NEIGHBORHOOD    = getNeighborhoodName();
 const INPUT_FILE      = `output/leads_audited_${NEIGHBORHOOD}.xlsx`;
 const SCREENSHOT_DIR  = `output/screenshots_${NEIGHBORHOOD}`;
+const LOG_FILE        = `output/screenshot_${NEIGHBORHOOD}.log`;
 const ERROR_LOG       = `${SCREENSHOT_DIR}/errors.log`;
 const MANIFEST_FILE   = `${SCREENSHOT_DIR}/manifest.json`;
 const CONCURRENCY     = 3;
@@ -42,12 +44,13 @@ const LEAD_FILTER = getLeadFilter();
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
-  appendFileSync(ERROR_LOG, line + '\n');
+  appendFileSync(LOG_FILE, line + '\n');
 }
 
 function logError(msg) {
   const line = `[${new Date().toISOString()}] ERROR ${msg}`;
-  appendFileSync(ERROR_LOG, line + '\n');
+  appendFileSync(LOG_FILE,   line + '\n');
+  appendFileSync(ERROR_LOG,  line + '\n');
   console.error(`  ✗ ${msg}`);
 }
 
@@ -256,8 +259,10 @@ async function main() {
     await browser.close();
   }
 
-  const allEntries  = [...manifestMap.values()];
-  const successCount = allEntries.filter(e => e.success).length;
+  const allEntries    = [...manifestMap.values()];
+  const successCount  = allEntries.filter(e => e.success).length;
+  const newSuccesses  = successCount - alreadyDone;
+  const newErrors     = completed - newSuccesses;
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
 
   log('\n═══════════════════════════════════════════');
@@ -267,11 +272,12 @@ async function main() {
   log(`  Leads total:     ${leads.length}`);
   log(`  Skipped (done):  ${skipped}`);
   log(`  Processed:       ${completed}`);
-  log(`  Screenshots OK:  ${successCount}`);
-  log(`  Errors:          ${completed - (successCount - alreadyDone)}`);
+  log(`  Screenshots OK:  ${newSuccesses}`);
+  log(`  Errors:          ${newErrors}`);
   log(`  Duration:        ${elapsed}s`);
   log(`  Output:          ${SCREENSHOT_DIR}/`);
   log(`  Manifest:        ${MANIFEST_FILE}`);
+  log(`  Log:             ${LOG_FILE}`);
   log('═══════════════════════════════════════════');
 }
 
