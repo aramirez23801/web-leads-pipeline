@@ -1,6 +1,6 @@
 # Stage 2 — `2-auditor.mjs` Audit
 **Date:** 2026-03-09
-**Status:** Audit complete — fixes in progress on `audit/stage2-auditor-fixes` branch
+**Status:** ✅ Complete — all actionable stage-2 items resolved
 **Audited by:** Claude Sonnet 4.6
 
 ---
@@ -484,29 +484,29 @@ output schema from this audit — the slot is ready when we implement this in v2
 
 ## Summary Table
 
-| # | Issue | Severity | Type |
-|---|---|---|---|
-| 1 | New stage 1 fields silently dropped — description, working_hours, verified, photos_count, etc. lost | HIGH | Data loss |
-| 2 | `xlsx` HIGH CVE — must migrate to exceljs | HIGH | Security |
-| 3 | Crawl errors cached permanently — no TTL, no --force flag | MEDIUM | Reliability |
-| 4 | Scoring misses most "bad but functional" websites — false negatives | MEDIUM | Business logic |
-| 5 | Dead website (dns_fail) scores 50 → Tier 2, not always Tier 1 | MEDIUM | Scoring |
-| 6 | `heavy_page` (>30 images) is a wrong metric for page weight | MEDIUM | Scoring |
-| 7 | `outdated_copyright` threshold hardcoded to 2023 — will age | MEDIUM | Scoring |
-| 8 | No design quality signal — Tier 4 for visually terrible sites | MEDIUM | Coverage |
-| 9 | No CMS detection — Wix/Squarespace vs abandoned WordPress not distinguished | MEDIUM | Coverage |
-| 10 | No response time measurement from crawl | MEDIUM | Coverage |
-| 11 | No log file — all output lost when terminal closes | MEDIUM | Observability |
-| 12 | No SEO basics check (title, H1, meta description) | LOW | Coverage |
-| 13 | No conversion signals (CTA, phone in header, contact form) | LOW | Coverage |
-| 14 | `DRY_RUN_LIMIT` name misleading — still writes files, still caches | LOW | UX |
-| 15 | No --force flag to bypass cache for specific domains | LOW | Usability |
-| 16 | `analyzeHtml` async with no await — misleading | LOW | Code quality |
-| 17 | No input schema validation — silent on missing/renamed columns | LOW | Reliability |
-| 18 | No timestamps in log lines | LOW | Observability |
-| 19 | `emails` shown as raw JSON string in outreach XLSX | LOW | UX |
-| 20 | No check that neighborhood is registered in neighborhoods.json | LOW | Config |
-| 21 | `rating` from Outscraper not used in scoring | INFO | Coverage |
-| 22 | LLM-based visual design scoring using stage 3 screenshots | INFO | Enhancement — deferred to v2, `design_score` column reserved as null |
-| 23 | Old jQuery / inline style abuse detection | INFO | Coverage |
-| 24 | Schema.org / LocalBusiness markup detection | INFO | Coverage |
+| # | Issue | Severity | Decision | Status |
+|---|---|---|---|---|
+| 1 | New stage 1 fields silently dropped — description, working_hours, verified, photos_count, etc. lost | HIGH | Pass all stage 1 fields through `buildOutputRow` | ✅ Fixed |
+| 2 | `xlsx` HIGH CVE — must migrate to exceljs | HIGH | Migrated both read and write to exceljs | ✅ Fixed |
+| 3 | Crawl errors cached permanently — no TTL, no --force flag | MEDIUM | Added `--force` flag to bypass cache entirely | ✅ Fixed |
+| 4 | Scoring misses most "bad but functional" websites — false negatives | MEDIUM | Added SEO basics + response time + CMS detection | ✅ Fixed |
+| 5 | Dead website (dns_fail) scores 50 → Tier 2, not always Tier 1 | MEDIUM | Raised dns_fail/connection_refused to 60pts (Tier 1 directly) | ✅ Fixed |
+| 6 | `heavy_page` (>30 images) is a wrong metric for page weight | MEDIUM | Removed; replaced with response_time_ms > 3000ms (+15pts) | ✅ Fixed |
+| 7 | `outdated_copyright` threshold hardcoded to 2023 — will age | MEDIUM | Now dynamic: `currentYear - 2` | ✅ Fixed |
+| 8 | No design quality signal — Tier 4 for visually terrible sites | MEDIUM | Deferred to v2 — `design_score` / `design_weakness` columns reserved as null | ✅ Deferred |
+| 9 | No CMS detection — Wix/Squarespace vs abandoned WordPress not distinguished | MEDIUM | Added: wix, squarespace, webflow, jimdo, ionos, wordpress, wordpress-builder | ✅ Fixed |
+| 10 | No response time measurement from crawl | MEDIUM | Measured via timestamp delta in `crawlUrl`, stored in `response_time_ms` | ✅ Fixed |
+| 11 | No log file — all output lost when terminal closes | MEDIUM | Added `output/auditor_{neighborhood}.log` (append-only) | ✅ Fixed |
+| 12 | No SEO basics check (title, H1, meta description) | LOW | Added: missing_h1 (+10), missing_meta_desc (+8), weak_title (+7) | ✅ Fixed |
+| 13 | No conversion signals (CTA, phone in header, contact form) | LOW | Skipped — too many false positives (forms that aren't contact forms) | ⏭ Skipped |
+| 14 | `DRY_RUN_LIMIT` name misleading — still writes files, still caches | LOW | Renamed to `LIMIT`, flag changed to `--limit` | ✅ Fixed |
+| 15 | No `--force` flag to bypass cache for specific domains | LOW | Added `--force` flag | ✅ Fixed |
+| 16 | `analyzeHtml` async with no await — misleading | LOW | Removed `async` keyword | ✅ Fixed |
+| 17 | No input schema validation — silent on missing/renamed columns | LOW | Added `validateInputSchema()`: exits on missing required cols, warns on missing expected cols | ✅ Fixed |
+| 18 | No timestamps in log lines | LOW | All output via `log()` helper with ISO timestamp prefix | ✅ Fixed |
+| 19 | `emails` shown as raw JSON string in outreach XLSX | LOW | Outreach XLSX parses JSON → comma-separated; leads_audited keeps raw JSON for downstream `JSON.parse()` | ✅ Fixed |
+| 20 | No check that neighborhood is registered in neighborhoods.json | LOW | Skipped — stage 2 doesn't use `neighborhoods.json` at all; XLSX existence check is sufficient | ⏭ Skipped |
+| 21 | `rating` from Outscraper not used in scoring | INFO | Skipped — rating is ambiguous as a lead quality signal (low rating may mean unresponsive owner, not just neglected site) | ⏭ Skipped |
+| 22 | LLM-based visual design scoring using stage 3 screenshots | INFO | Deferred to v2 — see §Specific/5 for full architecture analysis | ✅ Deferred |
+| 23 | Old jQuery / inline style abuse detection | INFO | Added jQuery 1.x/2.x detection (+8pts, logged as `jquery:OLD`) | ✅ Fixed |
+| 24 | Schema.org / LocalBusiness markup detection | INFO | Skipped — absence of LocalBusiness schema is near-universal among Spanish SMEs; not a differentiating signal | ⏭ Skipped |

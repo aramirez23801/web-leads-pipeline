@@ -7,11 +7,14 @@
 
 ## Stage 2 — `2-auditor.mjs`
 
-✅ Items below are being addressed in the stage 2 audit (`audit/stage2-auditor-fixes`).
+✅ Stage 2 audit complete. All items resolved.
 
-- [x] **Migrate from `xlsx` to `exceljs`** — being fixed in stage 2 audit
-- [x] **Use `photos_count` in opportunity scoring** — being fixed in stage 2 audit
-- [x] **Use `verified` in opportunity scoring** — being fixed in stage 2 audit
+- [x] **Migrate from `xlsx` to `exceljs`** — done (Phase 1)
+- [x] **Use `photos_count` in opportunity scoring** — decision: passed through as column, not scored.
+  `photos_count` is a GMB activity signal but not a reliable proxy for website quality.
+  Downstream stages and admin dashboard can use it for filtering.
+- [x] **Use `verified` in opportunity scoring** — decision: passed through as column, not scored.
+  Verified = owner is reachable, but doesn't correlate with website quality. Available in output.
 
 ---
 
