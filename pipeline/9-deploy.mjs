@@ -238,7 +238,7 @@ async function main() {
   if (LEAD_FILTER) {
     leads = [{ name: LEAD_FILTER }]
   } else {
-    leads = getTargetLeads(INPUT_FILE)
+    leads = await getTargetLeads(INPUT_FILE)
   }
 
   if (leads.length === 0) {

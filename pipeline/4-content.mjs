@@ -27,7 +27,7 @@ async function main() {
   }
 
   const startTime = Date.now();
-  const leads = getTargetLeads(INPUT_FILE);
+  const leads = await getTargetLeads(INPUT_FILE);
   console.log(`[SCRAPE] Neighborhood: ${NEIGHBORHOOD}`);
   console.log(`[SCRAPE] ${leads.length} target leads`);
 

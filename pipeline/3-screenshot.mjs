@@ -45,7 +45,7 @@ async function main() {
   mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
   const startTime = Date.now();
-  const leads = getTargetLeads(INPUT_FILE, 50);
+  const leads = await getTargetLeads(INPUT_FILE, 50);
   console.log(`[SCREENSHOT] ${leads.length} target leads (Tier 1 + Tier 2 score>=50)`);
 
   // Clear error log

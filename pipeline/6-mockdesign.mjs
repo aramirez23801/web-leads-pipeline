@@ -184,7 +184,7 @@ async function main() {
     }
     leads = [{ name: content.name }]
   } else {
-    leads = getTargetLeads(INPUT_FILE)
+    leads = await getTargetLeads(INPUT_FILE)
   }
 
   if (leads.length === 0) {

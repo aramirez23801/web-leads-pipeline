@@ -70,7 +70,7 @@ async function main() {
     }
     leads = [{ name: LEAD_FILTER, _safeName: LEAD_FILTER }];
   } else {
-    leads = getTargetLeads(INPUT_FILE).map(l => ({ ...l, _safeName: sanitizeName(l.name) }));
+    leads = (await getTargetLeads(INPUT_FILE)).map(l => ({ ...l, _safeName: sanitizeName(l.name) }));
   }
 
   if (leads.length === 0) {

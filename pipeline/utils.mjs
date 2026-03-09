@@ -9,7 +9,7 @@
  *   import { ... } from '../pipeline/utils.mjs';
  */
 
-import XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
 // ── CDN domains to exclude from logo candidates ──────────────────────────────
 const CDN_DOMAINS = [
@@ -59,17 +59,33 @@ export function sanitizeName(name) {
  * @param {number} [minTier2Score=50] - Minimum score to include Tier 2 leads.
  * @returns {Array<object>}
  */
-export function getTargetLeads(inputFile, minTier2Score = 50) {
-  const wb = XLSX.readFile(inputFile);
+export async function getTargetLeads(inputFile, minTier2Score = 50) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(inputFile);
 
-  const tier1Sheet = wb.Sheets['Tier 1 Hot Leads'];
-  const allSheet = wb.Sheets['All Leads'];
+  function sheetToJson(worksheet) {
+    if (!worksheet) return [];
+    const headers = [];
+    const rows = [];
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) {
+        headers.push(...row.values.slice(1));
+        return;
+      }
+      const obj = {};
+      headers.forEach((header, i) => {
+        if (header) obj[header] = row.getCell(i + 1).value ?? null;
+      });
+      rows.push(obj);
+    });
+    return rows;
+  }
 
-  const tier1 = tier1Sheet ? XLSX.utils.sheet_to_json(tier1Sheet) : [];
-  const allLeads = allSheet ? XLSX.utils.sheet_to_json(allSheet) : [];
+  const tier1 = sheetToJson(workbook.getWorksheet('Tier 1 Hot Leads'));
+  const allLeads = sheetToJson(workbook.getWorksheet('All Leads'));
 
   const tier2high = allLeads.filter(
-    r => r.tier === 'Tier 2' && r.opportunity_score >= minTier2Score
+    r => r.tier === 'Tier 2' && (r.opportunity_score ?? 0) >= minTier2Score
   );
 
   const combined = [...tier1, ...tier2high];
