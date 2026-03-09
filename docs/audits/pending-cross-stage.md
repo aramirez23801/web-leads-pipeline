@@ -1,5 +1,5 @@
 # Pending Cross-Stage TODOs
-**Last updated:** 2026-03-09
+**Last updated:** 2026-03-09 (stage 2 audit complete)
 **Purpose:** Items identified during stage audits that must be fixed in a different stage.
            Review this file at the start of each stage audit.
 
@@ -7,22 +7,11 @@
 
 ## Stage 2 — `2-auditor.mjs`
 
-- [ ] **Migrate from `xlsx` to `exceljs`**
-  Stage 2 reads `businesses_{neighborhood}.xlsx` (written by stage 1 with exceljs) and
-  writes `leads_audited_{neighborhood}.xlsx`. The `xlsx` library has a HIGH-severity CVE
-  with no upstream fix. Migrate both read and write operations to `exceljs`.
-  _Origin: stage 1 audit, dependency section_
+✅ Items below are being addressed in the stage 2 audit (`audit/stage2-auditor-fixes`).
 
-- [ ] **Use `photos_count` in opportunity scoring**
-  Stage 1 now saves `photos_count` from Outscraper. Businesses with more photos are more
-  active on Google Maps and generally higher-quality leads. Consider adding it as a scoring
-  signal in stage 2's tier/score logic.
-  _Origin: stage 1 audit §1_
-
-- [ ] **Use `verified` in opportunity scoring**
-  Stage 1 now saves `verified` (Google-verified listing). Verified businesses are confirmed
-  active — weight this positively in stage 2 scoring.
-  _Origin: stage 1 audit §1_
+- [x] **Migrate from `xlsx` to `exceljs`** — being fixed in stage 2 audit
+- [x] **Use `photos_count` in opportunity scoring** — being fixed in stage 2 audit
+- [x] **Use `verified` in opportunity scoring** — being fixed in stage 2 audit
 
 ---
 
@@ -128,3 +117,33 @@
   Stage 1 already uses `exceljs`. Stages 2 and any other stage that reads/writes XLSX
   should also migrate to eliminate the `xlsx` HIGH-severity CVE across the codebase.
   _Origin: stage 1 audit, dependency section_
+
+---
+
+## V2 — After First Campaign
+
+- [ ] **LLM visual design scoring (stage 2.5 or enrichment step)**
+  The current scoring catches technical failures but misses visually outdated sites that
+  pass all HTML checks (viewport present, SSL, recent copyright, <30 images → score 0,
+  Tier 4 SKIP). A site built in 2018 on a free WordPress theme with no CTAs and 6-second
+  load time would be skipped today.
+
+  **Approach (agreed):** After first María de Molina campaign, if we confirm "technically
+  fine but visually 2010" sites are real missed opportunities, implement a stage 2.5:
+  - Run stage 3 screenshots on Tier 1–3 leads (not all domains)
+  - Then run Haiku on each screenshot: `{"design_score": 1-5, "design_weakness": "..."}`
+  - Re-score: design_score 1 → +25pts, design_score 2 → +15pts
+  - Update `leads_audited_{neighborhood}.xlsx` with new scores/tiers
+
+  **Why not now:**
+  - Stage 3 only screenshots ~200-400 Tier 1+2 leads; screenshotting all ~1000 unique
+    domains first is 3-5x more work including dead sites (blank screenshots, CAPTCHA pages)
+  - Swapping stages 2↔3 was evaluated and rejected (dead site false positives, wasted compute)
+  - The other stage 2 fixes (CMS detection, SEO basics, response time, dead-site weight)
+    already catch the majority of false negatives
+  - Need real campaign data to know if this gap is worth the complexity
+
+  **Slot reserved:** `design_score` (null) and `design_weakness` (null) columns exist in
+  the stage 2 output schema from this audit — ready to populate when implemented.
+
+  _Origin: stage 2 audit §Specific/5_
