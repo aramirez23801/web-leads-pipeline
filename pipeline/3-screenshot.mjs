@@ -99,7 +99,7 @@ async function main() {
   const startTime = Date.now();
   log(`[INIT] Neighborhood: ${NEIGHBORHOOD}`);
 
-  let leads = await getTargetLeads(INPUT_FILE, 50);
+  let leads = await getTargetLeads(INPUT_FILE);
 
   if (LEAD_FILTER) {
     leads = leads.filter(l => sanitizeName(l.name) === LEAD_FILTER);
@@ -110,7 +110,7 @@ async function main() {
     log(`[LEAD] Single-lead mode: ${LEAD_FILTER}`);
   }
 
-  log(`[INIT] ${leads.length} target leads (Tier 1 + Tier 2 score>=50)`);
+  log(`[INIT] ${leads.length} target leads (Tier 1 + Tier 2)`);
 
   // Load manifest for resume — keyed by safeName
   const manifestMap = loadManifest();

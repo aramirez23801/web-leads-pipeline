@@ -51,15 +51,13 @@ export function sanitizeName(name) {
 // ── getTargetLeads ────────────────────────────────────────────────────────────
 
 /**
- * Reads an audited XLSX (output of 2-auditor.mjs) and returns the leads that
- * are worth targeting: all Tier 1 leads plus Tier 2 leads with
- * opportunity_score >= minTier2Score. Deduplicates by URL.
+ * Reads an audited XLSX (output of 2-auditor.mjs) and returns all Tier 1 and
+ * Tier 2 leads. Deduplicates by URL.
  *
  * @param {string} inputFile - Path to the audited XLSX file.
- * @param {number} [minTier2Score=50] - Minimum score to include Tier 2 leads.
  * @returns {Array<object>}
  */
-export async function getTargetLeads(inputFile, minTier2Score = 50) {
+export async function getTargetLeads(inputFile) {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(inputFile);
 
@@ -82,13 +80,9 @@ export async function getTargetLeads(inputFile, minTier2Score = 50) {
   }
 
   const tier1 = sheetToJson(workbook.getWorksheet('Tier 1 Hot Leads'));
-  const allLeads = sheetToJson(workbook.getWorksheet('All Leads'));
+  const tier2 = sheetToJson(workbook.getWorksheet('Tier 2 Warm Leads'));
 
-  const tier2high = allLeads.filter(
-    r => r.tier === 'Tier 2' && (r.opportunity_score ?? 0) >= minTier2Score
-  );
-
-  const combined = [...tier1, ...tier2high];
+  const combined = [...tier1, ...tier2];
   const seen = new Set();
 
   return combined.filter(lead => {
