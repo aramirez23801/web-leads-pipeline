@@ -1,6 +1,6 @@
 # Pending Cross-Stage TODOs
 
-**Last updated:** 2026-03-09 (stage 3 audit complete)
+**Last updated:** 2026-03-09 (stage 4 audit complete)
 **Purpose:** Items identified during stage audits that must be fixed in a different stage.
 Review this file at the start of each stage audit.
 
@@ -44,28 +44,31 @@ Review this file at the start of each stage audit.
 ## Stage 5 — `5-prompts.mjs`
 
 - [ ] **Use `description` (Google Maps) in design brief**
-      Stage 1 now saves the Google Maps business description in the `description` column.
-      This is structured, human-written text about what the business does — more reliable
-      than scraped website copy for many SMEs. Include it in the prompt context passed to
-      stage 6.
-      _Origin: stage 1 audit, issue #8_
+      `description` is now in content.json (added in stage 4 audit). Include it in the
+      brief so stage 6 gets specific context about what the business does.
+      _Origin: stage 1 audit, issue #8 — data now available in content.json_
 
 - [ ] **Use `working_hours` in design brief**
-      Stage 1 saves `working_hours` as a JSON string (`{"lunes":["9:00-18:00"],...}`).
-      Parse and format this into a human-readable schedule and include in the prompt context.
-      A mockup showing real business hours is significantly more credible and personalized.
-      _Origin: stage 1 audit, issue #16_
+      `working_hours` is now in content.json (added in stage 4 audit). Parse the JSON
+      string and format into a human-readable schedule for the brief.
+      _Origin: stage 1 audit, issue #16 — data now available in content.json_
+
+- [ ] **Migrate from `xlsx` to `exceljs`** — stage 5 still imports `xlsx` (HIGH CVE).
+      _Origin: stage 4 dependency audit_
 
 ---
 
 ## Stage 6 — `6-mockdesign.mjs`
 
-- [ ] **Display real `working_hours` in HTML mockup**
-      The design brief (from stage 5) should pass formatted working hours to stage 6.
-      The HTML mockup should include a "Horario" section with the actual business hours.
-      This is one of the highest-impact personalization improvements available — a mockup
-      with real hours looks nothing like a generic AI-generated template.
-      _Origin: stage 1 audit, issue #16_
+- [ ] **Use `description`, `working_hours`, `cms_detected` in mock prompt**
+      All three fields are now in content.json (added in stage 4 audit). The Claude prompt
+      in stage 6 should include:
+      - `description` — what the business does (human-curated, specific)
+      - `working_hours` — formatted hours for the Horario section in the mockup
+      - `cms_detected` — context for what problems to address ("this is a Jimdo 2012 site")
+      A mockup with real business hours and specific context looks nothing like a generic
+      AI-generated template.
+      _Origin: stage 1 audit issues #8 + #16 + stage 4 audit — data now available_
 
 ---
 
