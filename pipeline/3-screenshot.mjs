@@ -188,8 +188,14 @@ async function main() {
           });
 
           // Navigate — domcontentloaded is reliable; networkidle2 times out on sites
-          // with continuous background requests (analytics, chat widgets, ad scripts)
-          await page.goto(url, { waitUntil: 'domcontentloaded', timeout: TIMEOUT_MS });
+          // with continuous background requests (analytics, chat widgets, ad scripts).
+          // One retry on failure catches transient network hiccups.
+          try {
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: TIMEOUT_MS });
+          } catch (navErr) {
+            log(`[RETRY] ${name} — first navigation failed (${navErr.message?.substring(0, 60)}), retrying...`);
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: TIMEOUT_MS });
+          }
           // Short fixed wait for above-fold content to finish rendering
           await new Promise(r => setTimeout(r, 1500));
 
