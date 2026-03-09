@@ -84,7 +84,36 @@ async function readInputXlsx() {
   });
 
   log(`[INIT] Read ${rows.length} rows from ${INPUT_FILE}`);
+  validateInputSchema(rows);
   return rows;
+}
+
+// ── Step 1b: Validate input schema ──────────────────────────────────────────
+// Columns stage 2 cannot function without
+const REQUIRED_COLUMNS = ['name', 'website', 'google_id', 'rating', 'reviews'];
+// Columns added in stage 1 audit — warn if missing (older input file)
+const EXPECTED_COLUMNS = [
+  'emails', 'phone', 'category', 'subtypes', 'full_address', 'distance_meters',
+  'description', 'working_hours', 'verified', 'photos_count', 'located_in',
+  'latitude', 'longitude', 'place_id', 'business_status',
+];
+
+function validateInputSchema(rows) {
+  if (rows.length === 0) {
+    log('[WARN] Input file has no data rows — nothing to audit');
+    return;
+  }
+  const cols = new Set(Object.keys(rows[0]));
+  const missing = REQUIRED_COLUMNS.filter(c => !cols.has(c));
+  if (missing.length > 0) {
+    console.error(`[ERROR] Input XLSX is missing required columns: ${missing.join(', ')}`);
+    console.error('        Re-run stage 1 to generate a compatible input file.');
+    process.exit(1);
+  }
+  const missingExpected = EXPECTED_COLUMNS.filter(c => !cols.has(c));
+  if (missingExpected.length > 0) {
+    log(`[WARN] Input missing expected columns (stage 1 may be outdated): ${missingExpected.join(', ')}`);
+  }
 }
 
 // ── Step 2: Normalize URLs ──────────────────────────────────────────────────
@@ -231,6 +260,13 @@ function analyzeHtml(html, finalUrl) {
   const weak_title          = GENERIC_TITLES.includes(rawTitle.toLowerCase());
   const page_title          = rawTitle || null;
 
+  // FILTER 6b: Old jQuery (technical debt signal — pre-2016 library still loaded)
+  const has_old_jquery = $('script[src]').toArray().some(el => {
+    const src = ($(el).attr('src') || '').toLowerCase();
+    return src.includes('jquery-1.') || src.includes('jquery-2.')
+        || src.includes('/jquery/1.') || src.includes('/jquery/2.');
+  });
+
   // FILTER 7: CMS detection (from HTML patterns — zero extra requests)
   let cms_detected = null;
   const htmlLower = html.toLowerCase();
@@ -258,6 +294,7 @@ function analyzeHtml(html, finalUrl) {
     outdated_copyright,
     has_dead_tags,
     dead_tags_found,
+    has_old_jquery,
     image_count: imageCount,
     missing_h1,
     missing_meta_desc,
@@ -285,6 +322,7 @@ function scoreResult(result, reviewCount = 0) {
   if (result.no_ssl)             score += 25; // Browsers show "Not Secure"
   if (result.outdated_copyright) score += 15; // Site not maintained in 2+ years
   if (result.has_dead_tags)      score += 10; // 1990s/2000s HTML relics
+  if (result.has_old_jquery)     score += 8;  // jQuery 1.x/2.x — pre-2016 library still loaded
   // response_time_ms: slow site is a real problem
   if (result.response_time_ms != null && result.response_time_ms > 3000) score += 15;
 
@@ -333,6 +371,7 @@ function generatePitch(result) {
   if (result.no_ssl)             issues.push('marked as "Not Secure" by browsers (losing trust)');
   if (result.outdated_copyright) issues.push(`site content outdated since ${result.copyright_year}`);
   if (result.has_dead_tags)      issues.push('built with obsolete technology from 10+ years ago');
+  if (result.has_old_jquery)     issues.push('running outdated JavaScript library (jQuery 1.x/2.x)');
   if (result.response_time_ms != null && result.response_time_ms > 3000) {
     issues.push(`very slow load time (${result.response_time_ms}ms)`);
   }
@@ -377,7 +416,8 @@ function logProgress(idx, total, hostname, result) {
       result.missing_meta_desc ? 'no-meta' : '',
       result.weak_title ? 'weak-title' : '',
     ].filter(Boolean).join(',') || 'OK';
-    log(`[${idx}/${total}] ✓ ${hostname} — viewport:${vp} ssl:${ssl} copyright:${cr} dead_tags:${dt} response:${ms} seo:${seo}${cms ? ` cms:${cms}` : ''} → Score: ${score} (Tier ${tier})`);
+    const jq  = result.has_old_jquery ? ' jquery:OLD' : '';
+    log(`[${idx}/${total}] ✓ ${hostname} — viewport:${vp} ssl:${ssl} copyright:${cr} dead_tags:${dt}${jq} response:${ms} seo:${seo}${cms ? ` cms:${cms}` : ''} → Score: ${score} (Tier ${tier})`);
   }
 }
 
@@ -420,6 +460,7 @@ function buildOutputRow(biz, domainResult) {
     outdated_copyright: domainResult.outdated_copyright ? 'TRUE' : 'FALSE',
     has_dead_tags:      domainResult.has_dead_tags ? 'TRUE' : 'FALSE',
     dead_tags_found:    domainResult.dead_tags_found ?? '',
+    has_old_jquery:     domainResult.has_old_jquery ? 'TRUE' : 'FALSE',
     image_count:        domainResult.image_count ?? 0,
     response_time_ms:   domainResult.response_time_ms ?? '',
     missing_h1:         domainResult.missing_h1 ? 'TRUE' : 'FALSE',
@@ -481,6 +522,7 @@ async function writeOutputXlsx(allRows, tierCounts, stats) {
     { header: 'outdated_copyright', key: 'outdated_copyright', width: 18 },
     { header: 'has_dead_tags',      key: 'has_dead_tags',      width: 12 },
     { header: 'dead_tags_found',    key: 'dead_tags_found',    width: 20 },
+    { header: 'has_old_jquery',     key: 'has_old_jquery',     width: 14 },
     { header: 'image_count',        key: 'image_count',        width: 12 },
     { header: 'response_time_ms',   key: 'response_time_ms',   width: 16 },
     { header: 'missing_h1',         key: 'missing_h1',         width: 12 },
@@ -552,27 +594,34 @@ async function writeOutreachXlsx(allRows) {
     { header: 'Rating',       key: 'rating',       width: 7  },
     { header: 'Reviews',      key: 'reviews',      width: 9  },
     { header: 'Website',      key: 'website',      width: 35 },
+    { header: 'Emails',       key: 'emails',       width: 40 },
     { header: 'Main Problem', key: 'main_problem', width: 60 },
     { header: 'Contacted',    key: 'contacted',    width: 12 },
     { header: 'Notes',        key: 'notes',        width: 25 },
   ];
 
-  ws.addRows(outreachRows.map((r, i) => ({
-    num:          i + 1,
-    tier:         r.tier,
-    score:        r.opportunity_score,
-    name:         r.name,
-    phone:        r.phone,
-    category:     r.category,
-    address:      r.full_address,
-    distance_m:   r.distance_meters,
-    rating:       r.rating,
-    reviews:      r.reviews,
-    website:      r.website,
-    main_problem: r.pitch_angle,
-    contacted:    '',
-    notes:        '',
-  })));
+  ws.addRows(outreachRows.map((r, i) => {
+    // Parse JSON array from stage 1 into a human-readable comma string
+    let emailsDisplay = '';
+    try { emailsDisplay = JSON.parse(r.emails || '[]').join(', '); } catch { emailsDisplay = r.emails || ''; }
+    return {
+      num:          i + 1,
+      tier:         r.tier,
+      score:        r.opportunity_score,
+      name:         r.name,
+      phone:        r.phone,
+      category:     r.category,
+      address:      r.full_address,
+      distance_m:   r.distance_meters,
+      rating:       r.rating,
+      reviews:      r.reviews,
+      website:      r.website,
+      emails:       emailsDisplay,
+      main_problem: r.pitch_angle,
+      contacted:    '',
+      notes:        '',
+    };
+  }));
 
   await workbook.xlsx.writeFile(OUTREACH_FILE);
   log(`[DONE] Outreach XLSX written to ${OUTREACH_FILE} (${outreachRows.length} leads)`);
@@ -635,6 +684,7 @@ async function main() {
         outdated_copyright: false,
         has_dead_tags:      false,
         dead_tags_found:    '',
+        has_old_jquery:     false,
         image_count:        0,
         missing_h1:         false,
         missing_meta_desc:  false,
