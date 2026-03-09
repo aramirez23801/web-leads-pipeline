@@ -210,7 +210,8 @@ function analyzeHtml(html, finalUrl) {
     if (!latestCopyrightYear || y > latestCopyrightYear) latestCopyrightYear = y;
   }
 
-  const outdated_copyright = latestCopyrightYear !== null && latestCopyrightYear < 2023;
+  const currentYear = new Date().getFullYear();
+  const outdated_copyright = latestCopyrightYear !== null && latestCopyrightYear < (currentYear - 2);
   const copyright_year = latestCopyrightYear;
 
   // FILTER 4: Dead HTML tags
@@ -219,9 +220,36 @@ function analyzeHtml(html, finalUrl) {
   const has_dead_tags = foundDeadTags.length > 0;
   const dead_tags_found = foundDeadTags.join(', ');
 
-  // FILTER 5: Heavy page (excessive image count → slow loads)
+  // FILTER 5: Image count (retained as informational, not scored — slow_response replaced heavy_page)
   const imageCount = $('img').length;
-  const heavy_page = imageCount > 30;
+
+  // FILTER 6: SEO basics
+  const missing_h1          = $('h1').length === 0;
+  const missing_meta_desc   = $('meta[name="description"]').length === 0;
+  const rawTitle            = $('title').first().text().trim();
+  const GENERIC_TITLES      = ['home', 'inicio', 'bienvenido', 'bienvenida', 'welcome', 'index', ''];
+  const weak_title          = GENERIC_TITLES.includes(rawTitle.toLowerCase());
+  const page_title          = rawTitle || null;
+
+  // FILTER 7: CMS detection (from HTML patterns — zero extra requests)
+  let cms_detected = null;
+  const htmlLower = html.toLowerCase();
+  const generatorMeta = $('meta[name="generator"]').attr('content') || '';
+  if (/wix\.com|wixstatic\.com/.test(htmlLower) || /wix/i.test(generatorMeta)) {
+    cms_detected = 'wix';
+  } else if (/squarespace\.com/.test(htmlLower) || /squarespace/i.test(generatorMeta)) {
+    cms_detected = 'squarespace';
+  } else if (/webflow\.com|\.wf-/.test(htmlLower)) {
+    cms_detected = 'webflow';
+  } else if (/jimdo\.com/.test(htmlLower) || /jimdo/i.test(generatorMeta)) {
+    cms_detected = 'jimdo';
+  } else if (/1and1\.com|mywebsite\.com|ionos\.com/.test(htmlLower)) {
+    cms_detected = 'ionos';
+  } else if (/wp-content\/|wp-includes\//.test(htmlLower)) {
+    // Distinguish maintained WordPress (premium builder) from bare/neglected installs
+    const hasPremiumBuilder = /elementor|et-pb|divi|vc_row|fl-builder/.test(htmlLower);
+    cms_detected = hasPremiumBuilder ? 'wordpress-builder' : 'wordpress';
+  }
 
   return {
     missing_viewport,
@@ -230,8 +258,12 @@ function analyzeHtml(html, finalUrl) {
     outdated_copyright,
     has_dead_tags,
     dead_tags_found,
-    heavy_page,
     image_count: imageCount,
+    missing_h1,
+    missing_meta_desc,
+    weak_title,
+    page_title,
+    cms_detected,
   };
 }
 
@@ -239,20 +271,27 @@ function analyzeHtml(html, finalUrl) {
 function scoreResult(result, reviewCount = 0) {
   let score = 0;
 
-  // Dead site signals
+  // Dead / unreachable site — always Tier 1 territory
   if (result.crawl_error === 'dns_fail' || result.crawl_error === 'connection_refused') {
-    score += 50;
+    score += 60; // Tier 1 directly: dead website = zero web presence
   } else if (result.crawl_error === 'timeout' || result.crawl_error === 'connection_reset') {
     score += 35;
   } else if (result.crawl_error) {
     score += 20;
   }
 
-  if (result.missing_viewport) score += 40;
-  if (result.no_ssl)           score += 25;
-  if (result.outdated_copyright) score += 15;
-  if (result.has_dead_tags)    score += 10;
-  if (result.heavy_page)       score += 10;
+  // Technical failures
+  if (result.missing_viewport)   score += 40; // Not mobile-responsive — Google penalises this
+  if (result.no_ssl)             score += 25; // Browsers show "Not Secure"
+  if (result.outdated_copyright) score += 15; // Site not maintained in 2+ years
+  if (result.has_dead_tags)      score += 10; // 1990s/2000s HTML relics
+  // response_time_ms: slow site is a real problem
+  if (result.response_time_ms != null && result.response_time_ms > 3000) score += 15;
+
+  // SEO basics — each absence signals neglect
+  if (result.missing_h1)        score += 10; // No H1 = broken SEO structure
+  if (result.missing_meta_desc) score += 8;  // No meta description = neglected SEO
+  if (result.weak_title)        score += 7;  // "Home" or blank title = owner never configured it
 
   // Cap before applying multiplier
   score = Math.min(score, 100);
@@ -294,7 +333,12 @@ function generatePitch(result) {
   if (result.no_ssl)             issues.push('marked as "Not Secure" by browsers (losing trust)');
   if (result.outdated_copyright) issues.push(`site content outdated since ${result.copyright_year}`);
   if (result.has_dead_tags)      issues.push('built with obsolete technology from 10+ years ago');
-  if (result.heavy_page)         issues.push('overloaded with images (slow load times)');
+  if (result.response_time_ms != null && result.response_time_ms > 3000) {
+    issues.push(`very slow load time (${result.response_time_ms}ms)`);
+  }
+  if (result.missing_h1)        issues.push('no H1 heading (broken SEO structure)');
+  if (result.missing_meta_desc) issues.push('no meta description (missing from Google previews)');
+  if (result.weak_title)        issues.push('generic/blank page title (invisible to search engines)');
 
   if (issues.length === 0) return 'Site appears modern. Low priority.';
   return `Website has ${issues.length} technical issue${issues.length > 1 ? 's' : ''}: ${issues.join('; ')}.`;
@@ -327,7 +371,13 @@ function logProgress(idx, total, hostname, result) {
     const cr  = result.copyright_year || 'N/A';
     const dt  = result.dead_tags_found || 'NONE';
     const ms  = result.response_time_ms != null ? `${result.response_time_ms}ms` : 'N/A';
-    log(`[${idx}/${total}] ✓ ${hostname} — viewport:${vp} ssl:${ssl} copyright:${cr} dead_tags:${dt} response:${ms} → Score: ${score} (Tier ${tier})`);
+    const cms = result.cms_detected || '';
+    const seo = [
+      result.missing_h1 ? 'no-h1' : '',
+      result.missing_meta_desc ? 'no-meta' : '',
+      result.weak_title ? 'weak-title' : '',
+    ].filter(Boolean).join(',') || 'OK';
+    log(`[${idx}/${total}] ✓ ${hostname} — viewport:${vp} ssl:${ssl} copyright:${cr} dead_tags:${dt} response:${ms} seo:${seo}${cms ? ` cms:${cms}` : ''} → Score: ${score} (Tier ${tier})`);
   }
 }
 
@@ -370,9 +420,13 @@ function buildOutputRow(biz, domainResult) {
     outdated_copyright: domainResult.outdated_copyright ? 'TRUE' : 'FALSE',
     has_dead_tags:      domainResult.has_dead_tags ? 'TRUE' : 'FALSE',
     dead_tags_found:    domainResult.dead_tags_found ?? '',
-    heavy_page:         domainResult.heavy_page ? 'TRUE' : 'FALSE',
     image_count:        domainResult.image_count ?? 0,
     response_time_ms:   domainResult.response_time_ms ?? '',
+    missing_h1:         domainResult.missing_h1 ? 'TRUE' : 'FALSE',
+    missing_meta_desc:  domainResult.missing_meta_desc ? 'TRUE' : 'FALSE',
+    weak_title:         domainResult.weak_title ? 'TRUE' : 'FALSE',
+    page_title:         domainResult.page_title ?? '',
+    cms_detected:       domainResult.cms_detected ?? '',
     crawl_error:        domainResult.crawl_error ?? '',
     final_url:          domainResult.final_url ?? '',
     // Reserved for v2 LLM visual scoring (always null until implemented)
@@ -427,9 +481,13 @@ async function writeOutputXlsx(allRows, tierCounts, stats) {
     { header: 'outdated_copyright', key: 'outdated_copyright', width: 18 },
     { header: 'has_dead_tags',      key: 'has_dead_tags',      width: 12 },
     { header: 'dead_tags_found',    key: 'dead_tags_found',    width: 20 },
-    { header: 'heavy_page',         key: 'heavy_page',         width: 12 },
     { header: 'image_count',        key: 'image_count',        width: 12 },
     { header: 'response_time_ms',   key: 'response_time_ms',   width: 16 },
+    { header: 'missing_h1',         key: 'missing_h1',         width: 12 },
+    { header: 'missing_meta_desc',  key: 'missing_meta_desc',  width: 16 },
+    { header: 'weak_title',         key: 'weak_title',         width: 12 },
+    { header: 'page_title',         key: 'page_title',         width: 40 },
+    { header: 'cms_detected',       key: 'cms_detected',       width: 20 },
     { header: 'crawl_error',        key: 'crawl_error',        width: 25 },
     { header: 'final_url',          key: 'final_url',          width: 40 },
     { header: 'design_score',       key: 'design_score',       width: 12 },
@@ -577,8 +635,12 @@ async function main() {
         outdated_copyright: false,
         has_dead_tags:      false,
         dead_tags_found:    '',
-        heavy_page:         false,
         image_count:        0,
+        missing_h1:         false,
+        missing_meta_desc:  false,
+        weak_title:         false,
+        page_title:         null,
+        cms_detected:       null,
         response_time_ms:   null,
       };
 
