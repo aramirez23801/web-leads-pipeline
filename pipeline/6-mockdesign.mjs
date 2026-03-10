@@ -38,113 +38,26 @@ function getLeadFilter() {
 }
 const LEAD_FILTER = getLeadFilter()
 
-// ── Color helpers ─────────────────────────────────────────────────────────────
+// ── Prompt reader ─────────────────────────────────────────────────────────────
 
 /**
- * Returns true if the CSS color string is usable (not white, transparent, or blank).
+ * Reads the design_prompt.md assembled by stage 5.
+ * Returns null if the file doesn't exist.
  */
-function isUsableColor(cssColor) {
-  if (!cssColor || cssColor.trim() === '') return false
-  const c = cssColor.toLowerCase().replace(/\s/g, '')
-  if (c.includes('255,255,255')) return false // white
-  if (c.startsWith('rgba(0,0,0,0)')) return false // transparent
-  if (c === 'transparent') return false
-  if (c === 'rgba(0,0,0,0)') return false
-  return true
-}
-
-/**
- * Returns a hex or rgb brand color for the lead.
- * Uses extracted body background if usable; otherwise falls back to category defaults.
- */
-function getCategoryColor(category, colors) {
-  const bg = colors?.bodyBg || ''
-  if (isUsableColor(bg)) return bg
-
-  const cat = (category || '').toLowerCase()
-  if (
-    cat.includes('dental') ||
-    cat.includes('clínica') ||
-    cat.includes('médic')
-  )
-    return '#0ea5e9'
-  if (
-    cat.includes('abogad') ||
-    cat.includes('notari') ||
-    cat.includes('gestor')
-  )
-    return '#1e40af'
-  if (
-    cat.includes('electric') ||
-    cat.includes('fontaner') ||
-    cat.includes('instalac')
-  )
-    return '#f59e0b'
-  if (cat.includes('restaur') || cat.includes('café') || cat.includes('bar'))
-    return '#dc2626'
-  if (cat.includes('inmobiliar') || cat.includes('arquitect')) return '#0d9488'
-  if (cat.includes('psicolog') || cat.includes('fisioter')) return '#7c3aed'
-  if (cat.includes('limpiez') || cat.includes('mantenimient')) return '#16a34a'
-  return '#2563eb'
-}
-
-// ── Prompt builder ────────────────────────────────────────────────────────────
-
-function buildMockPrompt(content) {
-  const primaryColor = getCategoryColor(content.category, content.colors)
-  const year = new Date().getFullYear()
-  const address = content.full_address || '—'
-  const sectionsText = (content.sections || [])
-    .slice(0, 8)
-    .map((s) => `### ${s.heading}\n${s.content}`)
-    .join('\n\n')
-
-  return `You are an expert frontend developer and UI designer. Create a complete, single-file HTML website mockup for a Spanish business.
-
-BUSINESS DETAILS:
-- Name: ${content.name}
-- Category: ${content.category}
-- Phone: ${content.phone || 'No disponible'}
-- Address: ${address}
-- Current website issues: ${content.pitch_angle}
-
-EXISTING CONTENT TO INCORPORATE:
-${sectionsText || '(No existing content available — invent appropriate placeholder content for this category.)'}
-
-DESIGN REQUIREMENTS:
-- Single HTML file with embedded CSS and JS — no external dependencies except Google Fonts
-- Mobile-first, fully responsive (flexbox/grid, viewport meta tag)
-- Primary brand color: ${primaryColor} — build the entire palette around this
-- Has logo: ${content.logoUrl ? 'Yes — reference it as ./logo.png in an <img> tag' : 'No — use styled text logo'}
-- Language: Spanish throughout
-- Modern, professional aesthetic appropriate for a Spanish SME
-- Sections: sticky nav with smooth scroll, hero with clear CTA button, services/about section, contact section with phone number prominently displayed
-- Subtle entrance animations (CSS or minimal vanilla JS — no libraries)
-- Footer with phone, address, copyright ${year}
-- Target length: 600-900 lines of HTML. Complete is more important than elaborate.
-
-QUALITY BAR:
-Think Stripe, Linear, or a well-designed local business site. Clean visual hierarchy, excellent typography from Google Fonts (choose something distinctive — NOT Inter, Roboto, or Open Sans), generous whitespace, one strong accent color. The business owner should look at this and think "I want this."
-- Avoid: full dark backgrounds, emoji icons in feature cards, fake stat counters (100%, ∞)
-- Light or off-white base preferred — dark sections only for footer and hero accents
-
-OUTPUT: Return ONLY the complete HTML. No explanation, no markdown, no code fences. Start with <!DOCTYPE html>.`
+function readDesignPrompt(safeName) {
+  const path = join(CONTENT_DIR, safeName, 'design_prompt.md')
+  if (!existsSync(path)) return null
+  try {
+    return readFileSync(path, 'utf-8')
+  } catch {
+    return null
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function readContentJson(safeName) {
-  const path = join(CONTENT_DIR, safeName, 'content.json')
-  if (!existsSync(path)) return null
-  try {
-    return JSON.parse(readFileSync(path, 'utf-8'))
-  } catch {
-    return null
-  }
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -171,18 +84,21 @@ async function main() {
 
   let leads
   if (LEAD_FILTER) {
-    // --lead mode: read directly from content.json, no XLSX dependency
-    const content = readContentJson(LEAD_FILTER)
-    if (!content) {
+    // --lead mode: verify design_prompt.md exists, no XLSX dependency
+    const promptPath = join(CONTENT_DIR, LEAD_FILTER, 'design_prompt.md')
+    if (!existsSync(promptPath)) {
       console.error(
-        `[ERROR] content.json not found for --lead "${LEAD_FILTER}"`
+        `[ERROR] design_prompt.md not found for --lead "${LEAD_FILTER}"`
       )
       console.error(
-        `        Expected: ${join(CONTENT_DIR, LEAD_FILTER, 'content.json')}`
+        `        Expected: ${promptPath}`
+      )
+      console.error(
+        `        Run stage 5 first: node pipeline/5-prompts.mjs --lead ${LEAD_FILTER}`
       )
       process.exit(1)
     }
-    leads = [{ name: content.name }]
+    leads = [{ name: LEAD_FILTER }]
   } else {
     leads = await getTargetLeads(INPUT_FILE)
   }
@@ -218,14 +134,12 @@ async function main() {
       continue
     }
 
-    const content = readContentJson(safeName)
-    if (!content) {
-      console.log(`[MOCK] SKIP  ${lead.name} — content.json not found`)
+    const prompt = readDesignPrompt(safeName)
+    if (!prompt) {
+      console.log(`[MOCK] SKIP  ${lead.name} — design_prompt.md not found (run stage 5 first)`)
       skipped++
       continue
     }
-
-    const prompt = buildMockPrompt(content)
 
     // Dry-run: print prompt for first 2 leads and stop
     if (isDryRun) {
