@@ -1,6 +1,6 @@
 # Pending Cross-Stage TODOs
 
-**Last updated:** 2026-03-09 (stage 4 audit complete)
+**Last updated:** 2026-03-10 (stage 5 audit complete)
 **Purpose:** Items identified during stage audits that must be fixed in a different stage.
 Review this file at the start of each stage audit.
 
@@ -32,43 +32,40 @@ Review this file at the start of each stage audit.
 
 ## Stage 4 — `4-content.mjs`
 
-- [ ] **Parse `emails` as JSON array, not comma-split**
-      Stage 1 now stores `emails` as a JSON array string (e.g. `'["a@b.com","c@d.com"]'`).
-      Stage 4's email merge logic currently splits on commas, which will produce incorrect
-      results. Update to use `JSON.parse(row.emails || '[]')` when reading the emails field
-      from the audited XLSX.
-      _Origin: stage 1 audit, issue #5 — BREAKING CHANGE, must fix before a full pipeline run_
+✅ Stage 4 audit complete. All items resolved.
+
+- [x] **Parse `emails` as JSON array, not comma-split** — fixed, uses `JSON.parse()`.
 
 ---
 
 ## Stage 5 — `5-prompts.mjs`
 
-- [ ] **Use `description` (Google Maps) in design brief**
-      `description` is now in content.json (added in stage 4 audit). Include it in the
-      brief so stage 6 gets specific context about what the business does.
-      _Origin: stage 1 audit, issue #8 — data now available in content.json_
+✅ Stage 5 audit complete. All items resolved.
 
-- [ ] **Use `working_hours` in design brief**
-      `working_hours` is now in content.json (added in stage 4 audit). Parse the JSON
-      string and format into a human-readable schedule for the brief.
-      _Origin: stage 1 audit, issue #16 — data now available in content.json_
-
-- [ ] **Migrate from `xlsx` to `exceljs`** — stage 5 still imports `xlsx` (HIGH CVE).
-      _Origin: stage 4 dependency audit_
+- [x] **Use `description` (Google Maps) in design prompt** — included in `design_prompt.txt`.
+- [x] **Use `working_hours` in design prompt** — parsed + formatted as human-readable schedule.
+- [x] **Migrate from `xlsx` to `exceljs`** — done, uses `getTargetLeads()`.
+- [x] **Output changed from `brief.md` to `design_prompt.txt`** — stage 6 reads this directly.
+      All content.json fields now consumed: `bodyParagraphs`, `serviceLists`, `testimonials`,
+      `jsonLd`, `socialLinks`, `metaKeywords`, `rating`/`reviews`, `buttonBg`, `primaryVar`, etc.
+- [x] **FRONTEND_GUIDELINES.md** — relevant sections inlined in prompt (industry rules,
+      color psychology, font pairings, hero structure, CTA rules, common mistakes).
 
 ---
 
 ## Stage 6 — `6-mockdesign.mjs`
 
-- [ ] **Use `description`, `working_hours`, `cms_detected` in mock prompt**
-      All three fields are now in content.json (added in stage 4 audit). The Claude prompt
-      in stage 6 should include:
-      - `description` — what the business does (human-curated, specific)
-      - `working_hours` — formatted hours for the Horario section in the mockup
-      - `cms_detected` — context for what problems to address ("this is a Jimdo 2012 site")
-      A mockup with real business hours and specific context looks nothing like a generic
-      AI-generated template.
-      _Origin: stage 1 audit issues #8 + #16 + stage 4 audit — data now available_
+- [ ] **Remove `buildMockPrompt()` — replaced by `design_prompt.txt` from stage 5**
+      Stage 6 now reads `design_prompt.txt` per lead and sends it directly to Claude.
+      The internal prompt builder in stage 6 is dead code and must be deleted.
+      _Origin: stage 5 audit — Option B architectural change_
+
+- [ ] **Create `docs/design-prompt-guide.md`** — condensed, LLM-optimized version of
+      `FRONTEND_GUIDELINES.md` for prompt injection. Currently the relevant sections are
+      inlined directly in stage 5's prompt builder. This file will be extracted, refined,
+      and maintained separately during the stage 6 audit. Stage 5 will reference this file
+      instead of having guidelines hardcoded.
+      _Origin: stage 5 audit §8 — deferred to stage 6_
 
 ---
 
