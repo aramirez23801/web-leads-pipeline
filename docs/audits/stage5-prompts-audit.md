@@ -8,7 +8,7 @@
 ## What This Stage Does (after redesign)
 
 Stage 5 reads each Tier 1 + Tier 2 lead's `content.json` and assembles a complete,
-rich `design_prompt.txt` per lead. Stage 6 reads this file and sends it directly to
+rich `design_prompt.md` per lead. Stage 6 reads this file and sends it directly to
 the Claude API — no prompt construction in stage 6.
 
 **Before redesign:** Stage 5 wrote `brief.md` — a human-readable markdown brief that
@@ -24,7 +24,7 @@ only on API call + HTML validation.
 - `output/content_{neighborhood}/{safeName}/content.json`
 
 **Outputs:**
-- `output/content_{neighborhood}/{safeName}/design_prompt.txt` — the exact prompt
+- `output/content_{neighborhood}/{safeName}/design_prompt.md` — the exact prompt
   string that stage 6 will send to Claude Sonnet
 
 ---
@@ -49,7 +49,7 @@ completely ignored by stage 6.
 Additionally, `FRONTEND_GUIDELINES.md` was never injected into any prompt. It existed
 but was completely unused at runtime.
 
-**Resolution:** Stage 5 now writes `design_prompt.txt`. Stage 6 reads that file directly.
+**Resolution:** Stage 5 now writes `design_prompt.md`. Stage 6 reads that file directly.
 Prompt construction logic removed from stage 6 entirely.
 
 ---
@@ -121,19 +121,19 @@ No external calls. N/A.
 ### 7. Idempotency
 
 **[LOW] No resume check — regenerated all briefs on every run.**
-→ **Fixed:** Skips lead if `design_prompt.txt` already exists. Same pattern as other
+→ **Fixed:** Skips lead if `design_prompt.md` already exists. Same pattern as other
 stages. `--lead` flag bypasses skip check (allows single-lead re-generation).
 
 ---
 
 ### 8. Output Contract
 
-**Architectural change: `brief.md` → `design_prompt.txt`**
+**Architectural change: `brief.md` → `design_prompt.md`**
 
 Stage 5 now writes the complete, verbatim prompt string that stage 6 will send to
 Claude. Stage 6's `buildMockPrompt()` function was deleted.
 
-The `design_prompt.txt` includes all of the following, assembled from content.json:
+The `design_prompt.md` includes all of the following, assembled from content.json:
 
 **Business identity block:**
 - Name, category, address, phone, email (from `contactInfo.emails`)
@@ -197,7 +197,7 @@ No other dependencies added (no new packages).
 
 **[MEDIUM] `brief.md`, `BRIEFS_DIR`, `copyFileSync` — entire brief system removed.**
 The central `output/briefs_{neighborhood}/` folder and per-lead `brief.md` are
-eliminated. The `design_prompt.txt` per lead is the new output artifact.
+eliminated. The `design_prompt.md` per lead is the new output artifact.
 
 **[LOW] `detectKeepItems()` — removed.**
 Generated "keep" suggestions (booking, WhatsApp, etc.) that never reached stage 6.
@@ -264,15 +264,18 @@ during the stage 6 audit.
 
 | # | Issue | Severity | Status |
 |---|---|---|---|
-| 1 | `brief.md` output never read by stage 6 — stage 5 was an orphan | CRITICAL | ✅ Fixed (Option B: writes `design_prompt.txt`) |
+| 1 | `brief.md` output never read by stage 6 — stage 5 was an orphan | CRITICAL | ✅ Fixed (Option B: writes `design_prompt.md`) |
 | 2 | Stage 6 `buildMockPrompt()` ignored most of content.json | HIGH | ✅ Fixed (logic moved to stage 5, all fields used) |
 | 3 | `getCategoryColor()` checked `bodyBg` first (always white) — real brand colors ignored | HIGH | ✅ Fixed (buttonBg → primaryVar → category default) |
 | 4 | `FRONTEND_GUIDELINES.md` never injected into any prompt | HIGH | ✅ Fixed (relevant sections inlined in prompt) |
 | 5 | `xlsx` HIGH CVE | HIGH | ✅ Fixed (migrated to exceljs via getTargetLeads) |
 | 6 | Read 'All Leads' worksheet — processed Tier 3/4 leads | MEDIUM | ✅ Fixed (getTargetLeads() — Tier 1 + Tier 2 only) |
-| 7 | `description`, `working_hours`, all new stage 4 fields unused | MEDIUM | ✅ Fixed (all fields in design_prompt.txt) |
-| 8 | No resume check | LOW | ✅ Fixed (skip if design_prompt.txt exists) |
+| 7 | `description`, `working_hours`, all new stage 4 fields unused | MEDIUM | ✅ Fixed (all fields in design_prompt.md) |
+| 8 | No resume check | LOW | ✅ Fixed (skip if design_prompt.md exists) |
 | 9 | No `--lead` flag | LOW | ✅ Fixed |
 | 10 | No timestamps, no log file | LOW | ✅ Fixed |
 | 11 | `detectKeepItems()`, `listIssues()`, `SCREENSHOTS_DIR` dead code | LOW | ✅ Removed |
-| 12 | `design-prompt-guide.md` — condensed LLM-optimized guidelines | MEDIUM | ⏳ Deferred to stage 6 audit |
+| 12 | Font weights missing from typography — LLM loaded arbitrary weights | LOW | ✅ Fixed (headingWeights + bodyWeights added to getFontPairing()) |
+| 13 | Hero visual direction vague ("CSS geometric pattern") — no category guidance | LOW | ✅ Fixed (getHeroVisual() per category: trades, medical, legal, etc.) |
+| 14 | Trust bar missing — no section between hero and services for 3–4 key facts | LOW | ✅ Fixed (Section 3: trust bar with rating, hours, certifications from content) |
+| 15 | `design-prompt-guide.md` — condensed LLM-optimized guidelines | MEDIUM | ⏳ Deferred to stage 6 audit |

@@ -126,24 +126,51 @@ function formatWorkingHours(raw) {
 function getFontPairing(category) {
   const cat = (category || '').toLowerCase()
   if (cat.includes('restaur') || cat.includes('café') || cat.includes('bar'))
-    return { heading: 'Oswald', body: 'Merriweather', feel: 'bold and warm' }
+    return { heading: 'Oswald', headingWeights: '400;600;700', body: 'Merriweather', bodyWeights: '400;700', feel: 'bold and warm' }
   if (cat.includes('abogad') || cat.includes('notari') || cat.includes('gestor') || cat.includes('asesor'))
-    return { heading: 'Playfair Display', body: 'Source Sans 3', feel: 'authoritative and trustworthy' }
+    return { heading: 'Playfair Display', headingWeights: '600;700', body: 'Source Sans 3', bodyWeights: '400;600', feel: 'authoritative and trustworthy' }
   if (cat.includes('médic') || cat.includes('clínica') || cat.includes('dental') || cat.includes('salud'))
-    return { heading: 'Nunito', body: 'Open Sans', feel: 'friendly and clean' }
+    return { heading: 'Nunito', headingWeights: '600;700;800', body: 'Open Sans', bodyWeights: '400;600', feel: 'friendly and clean' }
   if (cat.includes('inmobiliar') || cat.includes('arquitect'))
-    return { heading: 'Libre Baskerville', body: 'Libre Franklin', feel: 'trustworthy and premium' }
+    return { heading: 'Libre Baskerville', headingWeights: '400;700', body: 'Libre Franklin', bodyWeights: '400;500', feel: 'trustworthy and premium' }
   if (cat.includes('psicolog') || cat.includes('fisioter') || cat.includes('wellness') || cat.includes('spa'))
-    return { heading: 'DM Serif Display', body: 'DM Sans', feel: 'soft and refined' }
+    return { heading: 'DM Serif Display', headingWeights: '400', body: 'DM Sans', bodyWeights: '400;500', feel: 'soft and refined' }
   if (cat.includes('peluquer') || cat.includes('estetica') || cat.includes('belleza'))
-    return { heading: 'Cormorant Garamond', body: 'Lato', feel: 'elegant' }
+    return { heading: 'Cormorant Garamond', headingWeights: '500;600;700', body: 'Lato', bodyWeights: '400;700', feel: 'elegant' }
   if (cat.includes('electric') || cat.includes('fontaner') || cat.includes('instalac') ||
       cat.includes('construc') || cat.includes('reform') || cat.includes('cerrajer'))
-    return { heading: 'Barlow Condensed', body: 'Barlow', feel: 'strong and direct' }
+    return { heading: 'Barlow Condensed', headingWeights: '600;700', body: 'Barlow', bodyWeights: '400;500', feel: 'strong and direct' }
   if (cat.includes('tecnolog') || cat.includes('software') || cat.includes('informát'))
-    return { heading: 'Space Grotesk', body: 'Inter', feel: 'modern and technical' }
+    return { heading: 'Space Grotesk', headingWeights: '500;600;700', body: 'Inter', bodyWeights: '400;500', feel: 'modern and technical' }
   // default: professional services
-  return { heading: 'Plus Jakarta Sans', body: 'Plus Jakarta Sans', feel: 'clean and versatile' }
+  return { heading: 'Plus Jakarta Sans', headingWeights: '600;700', body: 'Plus Jakarta Sans', bodyWeights: '400;500', feel: 'clean and versatile' }
+}
+
+// ── Hero visual direction by category ────────────────────────────────────────
+
+function getHeroVisual(category, ogImage) {
+  if (ogImage) return `Use the real business photo above as the hero visual (right side on desktop).`
+
+  const cat = (category || '').toLowerCase()
+  if (cat.includes('electric') || cat.includes('fontaner') || cat.includes('instalac') ||
+      cat.includes('construc') || cat.includes('reform') || cat.includes('cerrajer'))
+    return `Dark panel (--color-neutral-900) on the right third with an abstract geometric SVG — intersecting diagonal lines or a circuit/bolt motif in the primary color at low opacity. Conveys industrial precision.`
+  if (cat.includes('médic') || cat.includes('clínica') || cat.includes('dental') || cat.includes('salud'))
+    return `Clean white card with a soft primary-color gradient border and a minimal SVG icon (cross or stethoscope outline). Light and reassuring, never clinical-cold.`
+  if (cat.includes('abogad') || cat.includes('notari') || cat.includes('gestor') || cat.includes('asesor'))
+    return `Deep navy or dark-grey panel with a single subtle SVG motif (balanced scales or column). Restrained and authoritative — no gradients.`
+  if (cat.includes('restaur') || cat.includes('café') || cat.includes('bar'))
+    return `Warm-toned gradient (primary color → slightly darker) with a thin-line SVG illustration of tableware or food item. Inviting texture, not busy.`
+  if (cat.includes('inmobiliar') || cat.includes('arquitect'))
+    return `Full-height photo placeholder (grey with dashed border labeled "foto proyecto") or a clean isometric building outline SVG in the primary color. Aspirational and minimal.`
+  if (cat.includes('psicolog') || cat.includes('fisioter') || cat.includes('wellness') || cat.includes('spa'))
+    return `Soft gradient blob shape (primary color at 15% opacity) as an organic background. Calm, airy, and unhurried.`
+  if (cat.includes('peluquer') || cat.includes('estetica') || cat.includes('belleza'))
+    return `Elegant vertical strip of the primary color with a thin SVG floral or scissors motif. Minimal luxury aesthetic.`
+  if (cat.includes('tecnolog') || cat.includes('software') || cat.includes('informát'))
+    return `Dark panel with a subtle dot-grid or code-bracket SVG pattern in the primary color at low opacity. Modern and technical.`
+  // fallback
+  return `Primary-color gradient panel (primary → primary-dark) on the right side with a simple abstract SVG shape. Professional and distinctive.`
 }
 
 // ── Industry section requirements (from FRONTEND_GUIDELINES.md §10) ──────────
@@ -220,8 +247,10 @@ function buildDesignPrompt(content) {
   const phone = content.phone || ''
   const emails = content.contactInfo?.emails || []
   const emailStr = emails.length > 0 ? emails[0] : ''
+  const ogImage = content.ogImage || ''
   const primaryColor = resolvePrimaryColor(content.colors, category)
   const fonts = getFontPairing(category)
+  const heroVisual = getHeroVisual(category, ogImage)
   const industryRules = getIndustryRules(category)
   const hours = formatWorkingHours(content.working_hours)
   const rating = content.rating
@@ -309,7 +338,6 @@ function buildDesignPrompt(content) {
   const description = content.description || ''  // Google Maps description
   const cmsDetected = content.cms_detected || ''
   const pitchAngle = content.pitch_angle || ''
-  const ogImage = content.ogImage || ''
   const scrapeError = content.scrapeError || null
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -418,8 +446,8 @@ function buildDesignPrompt(content) {
   lines.push(`- Rule: 60% neutral/background · 30% primary · 10% accent on CTAs`)
   lines.push(``)
   lines.push(`### Typography`)
-  lines.push(`- **Heading font:** ${fonts.heading} (Google Fonts)`)
-  lines.push(`- **Body font:** ${fonts.body} (Google Fonts)`)
+  lines.push(`- **Heading font:** ${fonts.heading} — load weights: ${fonts.headingWeights} (Google Fonts)`)
+  lines.push(`- **Body font:** ${fonts.body} — load weights: ${fonts.bodyWeights} (Google Fonts)`)
   lines.push(`- **Feel:** ${fonts.feel}`)
   lines.push(`- Body minimum: 16px | Line-height body: 1.65 | Headings: 1.1–1.3`)
   lines.push(`- H1: \`font-size: clamp(2rem, 5vw, 4.5rem)\``)
@@ -461,25 +489,34 @@ function buildDesignPrompt(content) {
   lines.push(`- Subheadline: one sentence expanding the H1`)
   lines.push(`- Primary CTA button (e.g. "Solicitar Presupuesto", "Llamar Ahora", "Pedir Cita")`)
   lines.push(`- Trust signal below CTA: ${trustSignal ? `"${trustSignal}"` : 'years in business, certifications, or association memberships from the content above'}`)
-  lines.push(`- Right side (desktop): ${ogImage ? `use the hero image above` : 'CSS geometric pattern or gradient shape — no stock photos'}`)
+  lines.push(`- Right side (desktop): ${heroVisual}`)
   lines.push(``)
-  lines.push(`### 3. Services / Specializations`)
+  lines.push(`### 3. Trust bar`)
+  lines.push(`Horizontal strip between hero and services. 3–4 key facts as icon + text pairs.`)
+  lines.push(`Pick from whichever are available in the content:`)
+  if (trustSignal) lines.push(`- Google rating: ${trustSignal}`)
+  if (hours)       lines.push(`- Hours: ${hours}`)
+  lines.push(`- Years in business (if mentioned in content)`)
+  lines.push(`- Service area or coverage (if mentioned)`)
+  lines.push(`- Key certification or association (APIEM, Colegio, etc., if mentioned)`)
+  lines.push(`Style: light background (\`--color-primary-light\` tint or \`#f8f9ff\`), subtle dividers between items, centered on desktop.`)
+  lines.push(``)
   lines.push(`- 3–6 service cards, each with: inline SVG icon, title, 1-line description`)
   lines.push(`- Use the specific services listed in the content block — not generic ones`)
   lines.push(`- Cards: subtle border + shadow, lift on hover (\`translateY(-4px)\`)`)
   lines.push(``)
-  lines.push(`### 4. About / Why Us`)
+  lines.push(`### 5. About / Why Us`)
   lines.push(`- 1–2 paragraphs using the business's own words from the content block`)
   lines.push(`- 3–4 key differentiators as icon + text rows (years of experience, certifications, service area, etc.)`)
   lines.push(``)
   if (testimonialsBlock) {
-    lines.push(`### 5. Testimonials`)
+    lines.push(`### 6. Testimonials`)
     lines.push(`- Use the real testimonials from the content block`)
     lines.push(`- Quote card layout with quotation mark, text, attribution`)
     lines.push(``)
-    lines.push(`### 6. Contact`)
+    lines.push(`### 7. Contact`)
   } else {
-    lines.push(`### 5. Contact`)
+    lines.push(`### 6. Contact`)
   }
   lines.push(`- Phone: large, prominent, clickable \`tel:\` link — the most important CTA on the page`)
   if (emailStr) lines.push(`- Email: ${emailStr}`)

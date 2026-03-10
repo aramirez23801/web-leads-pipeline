@@ -1,6 +1,6 @@
 # Pending Cross-Stage TODOs
 
-**Last updated:** 2026-03-10 (stage 5 audit complete)
+**Last updated:** 2026-03-10 (stage 5 audit + UI/UX review complete)
 **Purpose:** Items identified during stage audits that must be fixed in a different stage.
 Review this file at the start of each stage audit.
 
