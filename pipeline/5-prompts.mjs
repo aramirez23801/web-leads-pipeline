@@ -501,6 +501,7 @@ function buildDesignPrompt(content) {
   lines.push(`- Key certification or association (APIEM, Colegio, etc., if mentioned)`)
   lines.push(`Style: light background (\`--color-primary-light\` tint or \`#f8f9ff\`), subtle dividers between items, centered on desktop.`)
   lines.push(``)
+  lines.push(`### 4. Services / Specializations`)
   lines.push(`- 3–6 service cards, each with: inline SVG icon, title, 1-line description`)
   lines.push(`- Use the specific services listed in the content block — not generic ones`)
   lines.push(`- Cards: subtle border + shadow, lift on hover (\`translateY(-4px)\`)`)

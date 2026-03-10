@@ -257,7 +257,7 @@ with build toolchains. For a single-file HTML LLM-generated mockup:
 |---|---|---|---|
 | 12 | `design-prompt-guide.md` doesn't exist — shared UI/UX standards never injected | CRITICAL | ⬜ Pending |
 | 13 | Stage 6 only reads `design_prompt.md` — no guide injection mechanism | CRITICAL | ⬜ Pending |
-| 14 | `### 4. Services / Specializations` heading missing from `design_prompt.md` (stage 5 bug) | HIGH | ⬜ Pending (fix in stage 5) |
+| 14 | `### 4. Services / Specializations` heading missing from `design_prompt.md` (stage 5 bug) | HIGH | ✅ Fixed in stage 5 (heading restored in buildDesignPrompt()) |
 | 15 | No CSS design system tokens (spacing, shadows, transitions, radii) in prompt | HIGH | ⬜ Pending (in guide) |
 | 16 | No font loading pattern (`preconnect` + `font-display: swap`) | MEDIUM | ⬜ Pending (in guide) |
 | 17 | No section heading pattern (eyebrow + H2 + subtitle CSS) | MEDIUM | ⬜ Pending (in guide) |

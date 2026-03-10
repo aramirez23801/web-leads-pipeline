@@ -278,4 +278,5 @@ during the stage 6 audit.
 | 12 | Font weights missing from typography — LLM loaded arbitrary weights | LOW | ✅ Fixed (headingWeights + bodyWeights added to getFontPairing()) |
 | 13 | Hero visual direction vague ("CSS geometric pattern") — no category guidance | LOW | ✅ Fixed (getHeroVisual() per category: trades, medical, legal, etc.) |
 | 14 | Trust bar missing — no section between hero and services for 3–4 key facts | LOW | ✅ Fixed (Section 3: trust bar with rating, hours, certifications from content) |
-| 15 | `design-prompt-guide.md` — condensed LLM-optimized guidelines | MEDIUM | ⏳ Deferred to stage 6 audit |
+| 15 | `### 4. Services / Specializations` heading dropped in section renumbering | HIGH | ✅ Fixed (stage 6 audit — heading restored in buildDesignPrompt()) |
+| 16 | `design-prompt-guide.md` — condensed LLM-optimized guidelines | MEDIUM | ✅ Fixed (stage 6 audit — principles-based guide, 522 lines) |
