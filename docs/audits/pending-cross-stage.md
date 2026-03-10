@@ -1,6 +1,6 @@
 # Pending Cross-Stage TODOs
 
-**Last updated:** 2026-03-10 (stage 5 audit + UI/UX review complete)
+**Last updated:** 2026-03-10 (stage 6 audit complete)
 **Purpose:** Items identified during stage audits that must be fixed in a different stage.
 Review this file at the start of each stage audit.
 
@@ -55,17 +55,12 @@ Review this file at the start of each stage audit.
 
 ## Stage 6 — `6-mockdesign.mjs`
 
-- [ ] **Remove `buildMockPrompt()` — replaced by `design_prompt.txt` from stage 5**
-      Stage 6 now reads `design_prompt.txt` per lead and sends it directly to Claude.
-      The internal prompt builder in stage 6 is dead code and must be deleted.
-      _Origin: stage 5 audit — Option B architectural change_
+✅ Stage 6 audit complete. All items resolved.
 
-- [ ] **Create `docs/design-prompt-guide.md`** — condensed, LLM-optimized version of
-      `FRONTEND_GUIDELINES.md` for prompt injection. Currently the relevant sections are
-      inlined directly in stage 5's prompt builder. This file will be extracted, refined,
-      and maintained separately during the stage 6 audit. Stage 5 will reference this file
-      instead of having guidelines hardcoded.
-      _Origin: stage 5 audit §8 — deferred to stage 6_
+- [x] **Remove `buildMockPrompt()`** — done (stage 5 audit)
+- [x] **Create `docs/design-prompt-guide.md`** — done. 522-line UI/UX principles guide.
+      Stage 6 reads it at startup and prepends it to every per-lead prompt.
+      _Origin: stage 5 audit §8 — resolved in stage 6 audit_
 
 ---
 
@@ -116,9 +111,10 @@ Review this file at the start of each stage audit.
 
 ## Package-level (not stage-specific)
 
-- [ ] **Remove dead dependencies: `pdf-lib`, `@pdf-lib/fontkit`**
-      These were used by the deleted `8-postcard.mjs`. Not imported anywhere in the current
-      pipeline. Remove from `package.json` at the end of all stage audits.
+- [x] **Remove dead dependencies: `pdf-lib`, `@pdf-lib/fontkit`**
+      Removed during stage 6 audit (`npm uninstall`). Also removed `xlsx` (HIGH CVE,
+      migrated to exceljs in stage 3 but never uninstalled). `npm audit` now reports
+      0 vulnerabilities.
       _Origin: stage 1 audit, dependency section_
 
 - [ ] **Investigate Outscraper pagination API**

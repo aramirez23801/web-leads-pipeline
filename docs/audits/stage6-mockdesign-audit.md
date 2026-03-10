@@ -1,6 +1,6 @@
 # Stage 6 — `6-mockdesign.mjs` Audit
 **Date:** 2026-03-10
-**Status:** 🔍 In progress
+**Status:** ✅ Complete — all items resolved, end-to-end tested
 **Audited by:** Claude Sonnet 4.6
 
 ---
@@ -239,30 +239,30 @@ with build toolchains. For a single-file HTML LLM-generated mockup:
 
 | # | Issue | Severity | Status |
 |---|---|---|---|
-| 1 | `RateLimitError` waits 60s but doesn't retry the failed lead | MEDIUM | ⬜ Pending |
-| 2 | Truncation: `stop_reason === 'max_tokens'` not checked — writes broken HTML | MEDIUM | ⬜ Pending |
-| 3 | `xlsx` still in `package.json` — HIGH CVE (never removed after migration) | HIGH | ⬜ Pending |
-| 4 | `pdf-lib`, `@pdf-lib/fontkit` dead deps — tracked in pending-cross-stage.md | LOW | ⬜ Pending |
-| 5 | `basic-ftp` transitive CVE — fixable with `npm audit fix` | LOW | ⬜ Pending |
-| 6 | No log file — most expensive stage has no persistent log | LOW | ⬜ Pending |
-| 7 | No timestamps on log lines — inconsistent with other stages | LOW | ⬜ Pending |
-| 8 | No accumulated cost total in summary block | LOW | ⬜ Pending |
-| 9 | `leads.indexOf(lead)` O(n) — replace with loop index | LOW | ⬜ Pending |
-| 10 | No minimum size check on `design_prompt.md` | LOW | ⬜ Pending |
-| 11 | MAX_TOKENS comment missing | LOW | ⬜ Pending |
+| 1 | `RateLimitError` waits 60s but doesn't retry the failed lead | MEDIUM | ✅ Fixed (retry loop, max 2 attempts) |
+| 2 | Truncation: `stop_reason === 'max_tokens'` not checked — writes broken HTML | MEDIUM | ✅ Fixed (throws on max_tokens, does not write file) |
+| 3 | `xlsx` still in `package.json` — HIGH CVE (never removed after migration) | HIGH | ✅ Fixed (`npm uninstall xlsx`) |
+| 4 | `pdf-lib`, `@pdf-lib/fontkit` dead deps | LOW | ✅ Fixed (`npm uninstall pdf-lib @pdf-lib/fontkit`) |
+| 5 | `basic-ftp` transitive CVE | LOW | ✅ Fixed (`npm audit fix` — 0 vulnerabilities) |
+| 6 | No log file | LOW | ✅ Fixed (`output/mockdesign_{neighborhood}.log`, suppressed in dry-run) |
+| 7 | No timestamps on log lines | LOW | ✅ Fixed (`log()` / `logError()` helpers with ISO timestamps) |
+| 8 | No accumulated cost total in summary | LOW | ✅ Fixed (`totalCost` accumulator in summary block) |
+| 9 | `leads.indexOf(lead)` O(n) | LOW | ✅ Fixed (loop index `i`) |
+| 10 | No minimum size check on `design_prompt.md` | LOW | ✅ Fixed (skips if < 512 bytes) |
+| 11 | MAX_TOKENS comment missing | LOW | ✅ Fixed (comment explains token budget reasoning) |
 
 ### Quality / UI/UX Issues (stage-specific)
 
 | # | Issue | Severity | Status |
 |---|---|---|---|
-| 12 | `design-prompt-guide.md` doesn't exist — shared UI/UX standards never injected | CRITICAL | ⬜ Pending |
-| 13 | Stage 6 only reads `design_prompt.md` — no guide injection mechanism | CRITICAL | ⬜ Pending |
-| 14 | `### 4. Services / Specializations` heading missing from `design_prompt.md` (stage 5 bug) | HIGH | ✅ Fixed in stage 5 (heading restored in buildDesignPrompt()) |
-| 15 | No CSS design system tokens (spacing, shadows, transitions, radii) in prompt | HIGH | ⬜ Pending (in guide) |
-| 16 | No font loading pattern (`preconnect` + `font-display: swap`) | MEDIUM | ⬜ Pending (in guide) |
-| 17 | No section heading pattern (eyebrow + H2 + subtitle CSS) | MEDIUM | ⬜ Pending (in guide) |
-| 18 | No button component (exact CSS, two variants) | MEDIUM | ⬜ Pending (in guide) |
-| 19 | No contact section two-column layout spec | MEDIUM | ⬜ Pending (in guide) |
-| 20 | No accessibility baseline (skip link, `:focus-visible`, `rel="noopener noreferrer"`) | MEDIUM | ⬜ Pending (in guide) |
-| 21 | No card component CSS | MEDIUM | ⬜ Pending (in guide) |
-| 22 | Trust bar component has no implementation pattern | LOW | ⬜ Pending (in guide) |
+| 12 | `design-prompt-guide.md` doesn't exist | CRITICAL | ✅ Fixed (522-line principles-based guide created) |
+| 13 | Stage 6 only reads `design_prompt.md` — no guide injection mechanism | CRITICAL | ✅ Fixed (`buildFullPrompt()`: guide + `---` + per-lead prompt) |
+| 14 | `### 4. Services / Specializations` heading missing from `design_prompt.md` | HIGH | ✅ Fixed in stage 5 |
+| 15 | No CSS design system tokens (spacing, shadows, transitions, radii) in prompt | HIGH | ✅ Fixed (guide Part C) |
+| 16 | No font loading pattern (`preconnect` + `font-display: swap`) | MEDIUM | ✅ Fixed (guide Part C) |
+| 17 | No section heading pattern (eyebrow + H2 + subtitle) | MEDIUM | ✅ Fixed (guide Part B + C) |
+| 18 | No button/component principles | MEDIUM | ✅ Fixed (guide Part D) |
+| 19 | No contact section two-column layout spec | MEDIUM | ✅ Fixed (guide Part D) |
+| 20 | No accessibility baseline (skip link, `:focus-visible`, `rel="noopener noreferrer"`) | MEDIUM | ✅ Fixed (guide Part F) |
+| 21 | No card/component patterns | MEDIUM | ✅ Fixed (guide Part D) |
+| 22 | No trust bar implementation | LOW | ✅ Fixed (guide Part D) |
