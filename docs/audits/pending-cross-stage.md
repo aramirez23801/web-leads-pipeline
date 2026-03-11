@@ -66,12 +66,21 @@ Review this file at the start of each stage audit.
 
 ## Stage 8 — `8-emailcontent.mjs`
 
-- [ ] **Use `description` (Google Maps) in email copy**
-      The Haiku prompt currently relies on scraped website content to identify the business's
-      specific web problem. The Google Maps `description` field (when present) gives direct
-      insight into what the business does and how it presents itself. Pass it as additional
-      context to Haiku for more specific `problema` sentences.
-      _Origin: stage 1 audit, issue #8_
+- [x] **Use `description` (Google Maps) in email copy**
+      Added to `buildProblemPrompt()` in stage 8 audit. When present, Google Maps description
+      is passed as additional context to Haiku for more specific `problema` sentences.
+      _Origin: stage 1 audit, issue #8 — resolved stage 8 audit_
+
+- [ ] **Automated unsubscribe (Option C) — implement when admin dashboard backend is ready**
+      Current v1: reply-based footer ("Para darte de baja, responde con 'No gracias'").
+      Target v2 architecture:
+      1. Add React Router + `<UnsubscribePage />` to mejoraweb.app (reads `?email=` + `?token=` params)
+      2. Add Azure Function at `/api/unsubscribe` — validates HMAC token, calls Resend suppression API
+      3. Stage 10: add `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click` headers
+         when sending via Resend API. Replace footer opt-out text with `mejoraweb.app/unsubscribe?...`
+      4. Admin dashboard: show suppression list, allow manual management.
+      No changes to stage 8 templates needed at that point — only stage 10 + mejoraweb.app.
+      _Origin: stage 8 audit — deferred pending backend_
 
 ---
 

@@ -31,18 +31,19 @@
 
 import 'dotenv/config'
 import Anthropic from '@anthropic-ai/sdk'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'fs'
 import { join } from 'path'
 import { getNeighborhoodName, sanitizeName, getTargetLeads } from './utils.mjs'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const NEIGHBORHOOD = getNeighborhoodName()
-const INPUT_FILE   = `output/leads_audited_${NEIGHBORHOOD}.xlsx`
-const CONTENT_DIR  = `output/content_${NEIGHBORHOOD}`
-const MODEL        = 'claude-haiku-4-5-20251001'
-const MAX_TOKENS   = 192   // JSON with problema sentence + tipo field
-const SLEEP_MS     = 200
+const INPUT_FILE = `output/leads_audited_${NEIGHBORHOOD}.xlsx`
+const CONTENT_DIR = `output/content_${NEIGHBORHOOD}`
+const LOG_FILE = `output/emailcontent_${NEIGHBORHOOD}.log`
+const MODEL = 'claude-haiku-4-5-20251001'
+const MAX_TOKENS = 192 // JSON with problema sentence + tipo field
+const SLEEP_MS = 200
 
 // ── CLI flags ─────────────────────────────────────────────────────────────────
 
@@ -54,10 +55,24 @@ function getLeadFilter() {
 }
 const LEAD_FILTER = getLeadFilter()
 
+// ── Logging ───────────────────────────────────────────────────────────────────
+
+function log(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}`
+  console.log(line)
+  if (!isDryRun) appendFileSync(LOG_FILE, line + '\n')
+}
+
+function logError(msg) {
+  const line = `[${new Date().toISOString()}] [ERROR] ${msg}`
+  console.error(line)
+  if (!isDryRun) appendFileSync(LOG_FILE, line + '\n')
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms))
+  return new Promise((r) => setTimeout(r, ms))
 }
 
 function readJson(filePath) {
@@ -69,16 +84,24 @@ function readJson(filePath) {
   }
 }
 
+// Truncate long business names for subject lines (50-char limit recommended).
+// "Area2 Instalaciones Eléctricas y Mecánicas S.A., algo que notamos..." → too long.
+function truncateName(name, maxLen = 28) {
+  if (!name || name.length <= maxLen) return name
+  return name.slice(0, maxLen).trimEnd() + '…'
+}
+
 // ── Prompt: asks Haiku for ONE problem sentence only ─────────────────────────
 
 function buildProblemPrompt(content) {
-  const name     = content.name     || 'este negocio'
+  const name = content.name || 'este negocio'
   const category = content.category || 'negocio local'
-  const pitch    = content.pitch_angle || ''
+  const pitch = content.pitch_angle || ''
+  const description = content.description || '' // Google Maps business description
 
   const sectionTitles = (content.sections || [])
     .slice(0, 3)
-    .map(s => s.heading)
+    .map((s) => s.heading)
     .filter(Boolean)
     .join(', ')
 
@@ -93,15 +116,16 @@ function buildProblemPrompt(content) {
 DATOS DEL NEGOCIO:
 - Nombre: ${name}
 - Sector: ${category}
+${description ? `- Descripción (Google Maps): ${description}` : ''}
 - Problema detectado (pitch): ${pitch || '(no especificado — deduce del contexto)'}
 - ${siteStatus}
 
 CAMPOS A DEVOLVER:
-1. "problema": UNA sola frase describiendo el problema específico detectado en su web.
+1. "problema": UNA sola frase en español describiendo el problema específico detectado en su web.
    - Máximo 25 palabras. Empieza en minúscula (irá después de dos puntos en el email).
    - Sé específico: menciona el problema concreto (móvil, velocidad, SEO, diseño anticuado, web no accesible, sin web, etc.).
    - Debe sonar como si hubieras mirado la web de verdad, no genérico.
-   - Sin comillas, sin punto final.
+   - Sin comillas, sin punto final. En español.
 
 2. "tipo": el tipo de negocio en español, en plural, en minúscula, listo para usar en la frase \
 "clientes que buscan [tipo] en la zona". Ejemplos: "dentistas", "peluquerías", "restaurantes", \
@@ -125,11 +149,13 @@ function parseProblemResponse(rawText) {
   try {
     parsed = JSON.parse(cleaned)
   } catch (err) {
-    throw new Error(`Response is not valid JSON: ${err.message}\nRaw: ${rawText.slice(0, 200)}`)
+    throw new Error(
+      `Response is not valid JSON: ${err.message}\nRaw: ${rawText.slice(0, 200)}`
+    )
   }
 
   const problema = (parsed.problema || '').replace(/\.$/, '').trim()
-  const tipo     = (parsed.tipo     || '').toLowerCase().trim()
+  const tipo = (parsed.tipo || '').toLowerCase().trim()
 
   if (!problema || problema.length < 10) {
     throw new Error(`"problema" field too short or empty in model response`)
@@ -149,43 +175,55 @@ function parseProblemResponse(rawText) {
 //
 // {{PREVIEW_URL}} in emails 2 and 3 is replaced by stage 9 after deploy.
 
+// LSSI-compliant footer appended to every email (required by Spanish law).
+// V2: replace reply-based opt-out with mejoraweb.app/unsubscribe + backend endpoint.
+const LEGAL_FOOTER = [
+  '--',
+  'Andrés Ramírez · mejoraweb.app',
+  'IE Business School · María de Molina 31, 28006 Madrid',
+  'Para darte de baja, responde con "No gracias".',
+].join('\n')
+
 function assembleEmail1(content, problemSentence, tipo) {
   const name = content.name || 'su negocio'
-
-  const subject = `${name}, algo que notamos en tu web`
+  const subject = `${truncateName(name)}, algo que notamos en tu web`
 
   const body = [
     'Hola,',
     '',
-    'Somos dos estudiantes del IE empezando mejoraweb.app aquí en el barrio de María de Molina.',
+    'Somos dos estudiantes del IE lanzando mejoraweb.app aquí en el barrio de María de Molina.',
     '',
     `Antes de escribirte, analizamos tu web: ${problemSentence}. Eso se traduce en clientes que buscan ${tipo} en la zona y que no llegan a encontrarte.`,
     '',
-    `Ya preparamos un diseño nuevo de ${name} teniendo esto en cuenta. ¿Te lo mandamos para que lo veas? Si te convence, podemos hablar 15 minutos cuando te venga bien.`,
+    `Ya preparamos un diseño nuevo de ${name} teniendo esto en cuenta. ¿Te lo mandamos? Si te gusta, podemos hablar 5 minutos.`,
     '',
     'Un saludo,',
     'Andrés',
     'mejoraweb.app',
+    '',
+    LEGAL_FOOTER,
   ].join('\n')
 
   return { subject, body }
 }
 
 function assembleEmail2(content, subject1) {
-  const name    = content.name || 'su negocio'
+  const name = content.name || 'su negocio'
   const subject = `Re: ${subject1}`
 
   const body = [
     'Hola,',
     '',
-    `Te escribí hace unos días sobre el diseño que preparamos para ${name}. Por si no lo viste, aquí el enlace:`,
+    `Te escribí hace unos días sobre ${name}. Por si no lo viste, preparamos un diseño nuevo. Aquí lo tienes:`,
     '',
     '{{PREVIEW_URL}}',
     '',
-    'Si te gusta lo que ves y quieres hablarlo, dime y buscamos un momento.',
+    'Si te gusta, dime y buscamos un momento para hablarlo.',
     '',
     'Andrés',
     'mejoraweb.app',
+    '',
+    LEGAL_FOOTER,
   ].join('\n')
 
   return { subject, body }
@@ -207,6 +245,8 @@ function assembleEmail3(content, subject1) {
     '',
     'Andrés',
     'mejoraweb.app',
+    '',
+    LEGAL_FOOTER,
   ].join('\n')
 
   return { subject, body }
@@ -217,8 +257,12 @@ function assembleEmail3(content, subject1) {
 async function main() {
   if (!LEAD_FILTER && !existsSync(INPUT_FILE)) {
     console.error(`[ERROR] Input file not found: ${INPUT_FILE}`)
-    console.error(`        Run the auditor first: node pipeline/2-auditor.mjs --neighborhood ${NEIGHBORHOOD}`)
-    console.error(`        Or use --lead <safeName> to process a single lead directly.`)
+    console.error(
+      `        Run the auditor first: node pipeline/2-auditor.mjs --neighborhood ${NEIGHBORHOOD}`
+    )
+    console.error(
+      `        Or use --lead <safeName> to process a single lead directly.`
+    )
     process.exit(1)
   }
 
@@ -237,8 +281,12 @@ async function main() {
   if (LEAD_FILTER) {
     const content = readJson(join(CONTENT_DIR, LEAD_FILTER, 'content.json'))
     if (!content) {
-      console.error(`[ERROR] content.json not found for --lead "${LEAD_FILTER}"`)
-      console.error(`        Expected: ${join(CONTENT_DIR, LEAD_FILTER, 'content.json')}`)
+      console.error(
+        `[ERROR] content.json not found for --lead "${LEAD_FILTER}"`
+      )
+      console.error(
+        `        Expected: ${join(CONTENT_DIR, LEAD_FILTER, 'content.json')}`
+      )
       process.exit(1)
     }
     leads = [{ name: content.name || LEAD_FILTER }]
@@ -247,33 +295,40 @@ async function main() {
   }
 
   if (leads.length === 0) {
-    console.log(`[EMAIL] No target leads found in ${INPUT_FILE}`)
+    log(`[EMAIL] No target leads found in ${INPUT_FILE}`)
     process.exit(0)
   }
 
-  console.log(`[EMAIL] Neighborhood : ${NEIGHBORHOOD}`)
-  console.log(`[EMAIL] Leads        : ${leads.length}${LEAD_FILTER ? ` (filtered: ${LEAD_FILTER})` : ''}`)
-  console.log(`[EMAIL] Mode         : ${isDryRun ? 'DRY RUN (no API calls)' : 'LIVE'}`)
-  console.log(`[EMAIL] Model        : ${MODEL}`)
-  console.log(`[EMAIL] Template     : PAS — 3-email sequence (Day 0 / Day 4 / Day 12)`)
+  log(`[EMAIL] Neighborhood : ${NEIGHBORHOOD}`)
+  log(
+    `[EMAIL] Leads        : ${leads.length}${LEAD_FILTER ? ` (filtered: ${LEAD_FILTER})` : ''}`
+  )
+  log(`[EMAIL] Mode         : ${isDryRun ? 'DRY RUN (no API calls)' : 'LIVE'}`)
+  log(`[EMAIL] Model        : ${MODEL}`)
+  log(`[EMAIL] Template     : PAS — 3-email sequence (Day 0 / Day 4 / Day 12)`)
 
   const startTime = Date.now()
-  let processed   = 0
-  let skipped     = 0
-  let errors      = 0
+  let processed = 0
+  let skipped = 0
+  let errors = 0
   let dryRunCount = 0
-  let totalCost   = 0
+  let totalCost = 0
 
-  for (const lead of leads) {
-    const safeName    = LEAD_FILTER || sanitizeName(lead.name)
-    const emailPath   = join(CONTENT_DIR, safeName, 'email.json')
+  for (let i = 0; i < leads.length; i++) {
+    const lead = leads[i]
+    const safeName = LEAD_FILTER || sanitizeName(lead.name)
+    const emailPath = join(CONTENT_DIR, safeName, 'email.json')
     const displayName = lead.name || safeName
 
     // Resume: skip if email.json already has a complete sequence
     if (!isDryRun) {
       const existing = readJson(emailPath)
-      if (existing?.email1?.subject && existing?.email2?.body && existing?.email3?.body) {
-        console.log(`[EMAIL] SKIP  ${displayName} — email.json exists`)
+      if (
+        existing?.email1?.subject &&
+        existing?.email2?.body &&
+        existing?.email3?.body
+      ) {
+        log(`[EMAIL] SKIP  ${displayName} — email.json exists`)
         skipped++
         continue
       }
@@ -281,14 +336,16 @@ async function main() {
 
     const content = readJson(join(CONTENT_DIR, safeName, 'content.json'))
     if (!content) {
-      console.log(`[EMAIL] SKIP  ${displayName} — content.json not found`)
+      log(`[EMAIL] SKIP  ${displayName} — content.json not found`)
       skipped++
       continue
     }
 
     // Backfill XLSX fields that content.json might not have stored
-    if (lead.pitch_angle  && !content.pitch_angle)  content.pitch_angle  = lead.pitch_angle
-    if (lead.full_address && !content.full_address) content.full_address = lead.full_address
+    if (lead.pitch_angle && !content.pitch_angle)
+      content.pitch_angle = lead.pitch_angle
+    if (lead.full_address && !content.full_address)
+      content.full_address = lead.full_address
 
     const prompt = buildProblemPrompt(content)
 
@@ -296,7 +353,10 @@ async function main() {
     if (isDryRun) {
       dryRunCount++
       const placeholder = '[PROBLEMA_ESPECIFICO — generado por Haiku]'
-      const e1 = assembleEmail1(content, placeholder, (content.category || 'negocios locales').toLowerCase())
+      const placeholderTipo = (
+        content.category || 'negocios locales'
+      ).toLowerCase()
+      const e1 = assembleEmail1(content, placeholder, placeholderTipo)
       const e2 = assembleEmail2(content, e1.subject)
       const e3 = assembleEmail3(content, e1.subject)
 
@@ -322,88 +382,110 @@ async function main() {
     }
 
     // ── Live: call Haiku for problem sentence, assemble all 3 emails ──────
-    try {
-      process.stdout.write(`[EMAIL] GEN   ${displayName} ... `)
+    let attempt = 0
+    let success = false
 
-      const message = await client.messages.create({
-        model:      MODEL,
-        max_tokens: MAX_TOKENS,
-        messages:   [{ role: 'user', content: prompt }],
-      })
+    while (attempt < 2 && !success) {
+      attempt++
+      try {
+        process.stdout.write(
+          `[EMAIL] GEN   ${displayName}${attempt > 1 ? ' (retry)' : ''} ... `
+        )
 
-      const rawText                    = message.content[0]?.text || ''
-      const { problemSentence, tipo } = parseProblemResponse(rawText)
+        const message = await client.messages.create({
+          model: MODEL,
+          max_tokens: MAX_TOKENS,
+          messages: [{ role: 'user', content: prompt }]
+        })
 
-      const email1 = assembleEmail1(content, problemSentence, tipo)
-      const email2 = assembleEmail2(content, email1.subject)
-      const email3 = assembleEmail3(content, email1.subject)
+        const rawText = message.content[0]?.text || ''
+        const { problemSentence, tipo } = parseProblemResponse(rawText)
 
-      const emailData = { email1, email2, email3, previewUrl: null }
-      writeFileSync(emailPath, JSON.stringify(emailData, null, 2), 'utf-8')
+        const email1 = assembleEmail1(content, problemSentence, tipo)
+        const email2 = assembleEmail2(content, email1.subject)
+        const email3 = assembleEmail3(content, email1.subject)
 
-      // Haiku pricing: $1.00/1M input, $5.00/1M output
-      const inputTokens  = message.usage.input_tokens
-      const outputTokens = message.usage.output_tokens
-      const cost = (inputTokens * 0.000001) + (outputTokens * 0.000005)
-      totalCost += cost
+        const emailData = { email1, email2, email3, previewUrl: null }
+        writeFileSync(emailPath, JSON.stringify(emailData, null, 2), 'utf-8')
 
-      console.log('✓')
-      console.log(`  ↳ Problem  : ${problemSentence}`)
-      console.log(`  ↳ Tipo     : ${tipo}`)
-      console.log(`  ↳ Subject1 : ${email1.subject}`)
-      console.log(`  ↳ Tokens   : ${inputTokens} in / ${outputTokens} out | Cost: $${cost.toFixed(5)}`)
+        // Haiku pricing: $1.00/1M input, $5.00/1M output
+        const inputTokens = message.usage.input_tokens
+        const outputTokens = message.usage.output_tokens
+        const cost = inputTokens * 0.000001 + outputTokens * 0.000005
+        totalCost += cost
 
-      if (LEAD_FILTER) {
-        console.log(`\n  EMAIL 1 (Day 0):\n`)
-        console.log(email1.body)
-        console.log(`\n  EMAIL 2 (Day 4):\n`)
-        console.log(email2.body)
-        console.log(`\n  EMAIL 3 (Day 12):\n`)
-        console.log(email3.body)
-        console.log(`\n  File: ${emailPath}`)
+        console.log('✓')
+        log(`  ↳ Problem  : ${problemSentence}`)
+        log(`  ↳ Tipo     : ${tipo}`)
+        log(`  ↳ Subject1 : ${email1.subject}`)
+        log(
+          `  ↳ Tokens   : ${inputTokens} in / ${outputTokens} out | Cost: $${cost.toFixed(5)}`
+        )
+
+        if (LEAD_FILTER) {
+          log(`\n  EMAIL 1 (Day 0):\n`)
+          log(email1.body)
+          log(`\n  EMAIL 2 (Day 4):\n`)
+          log(email2.body)
+          log(`\n  EMAIL 3 (Day 12):\n`)
+          log(email3.body)
+          log(`\n  File: ${emailPath}`)
+        }
+
+        processed++
+        success = true
+
+        if (i < leads.length - 1) {
+          await sleep(SLEEP_MS)
+        }
+      } catch (err) {
+        if (attempt === 1 && err instanceof Anthropic.RateLimitError) {
+          console.log('✗ RATE LIMIT')
+          log(`  [RATE LIMIT] Waiting 30s then retrying...`)
+          await sleep(30_000)
+          // Loop continues for attempt 2
+        } else {
+          console.log('✗ ERROR')
+          if (err instanceof Anthropic.RateLimitError) {
+            logError(`${displayName} — rate limited on retry, giving up`)
+          } else if (err instanceof Anthropic.APIError) {
+            logError(`${displayName} — API error ${err.status}: ${err.message}`)
+          } else {
+            logError(`${displayName} — ${err.message}`)
+          }
+          errors++
+          break
+        }
       }
-
-      processed++
-
-      if (leads.indexOf(lead) < leads.length - 1) {
-        await sleep(SLEEP_MS)
-      }
-    } catch (err) {
-      console.log('✗ ERROR')
-      if (err instanceof Anthropic.RateLimitError) {
-        console.error(`  [RATE LIMIT] Waiting 30s before continuing...`)
-        await sleep(30_000)
-      } else if (err instanceof Anthropic.APIError) {
-        console.error(`  [API ERROR ${err.status}] ${err.message}`)
-      } else {
-        console.error(`  [ERROR] ${err.message}`)
-      }
-      errors++
     }
   }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(0)
 
   if (isDryRun) {
-    console.log(`\n[EMAIL] Dry run complete — ${dryRunCount} prompt(s) printed, no API calls made`)
+    console.log(
+      `\n[EMAIL] Dry run complete — ${dryRunCount} prompt(s) printed, no API calls made`
+    )
     return
   }
 
-  console.log('\n' + '═'.repeat(46))
-  console.log('  EMAIL CONTENT COMPLETE')
-  console.log('═'.repeat(46))
-  console.log(`  Neighborhood : ${NEIGHBORHOOD}`)
-  console.log(`  Template     : PAS (3-email sequence)`)
-  console.log(`  Processed    : ${processed}`)
-  console.log(`  Skipped      : ${skipped}`)
-  console.log(`  Errors       : ${errors}`)
-  console.log(`  Total cost   : $${totalCost.toFixed(4)}`)
-  console.log(`  Duration     : ${elapsed}s`)
-  console.log(`  Output       : ${CONTENT_DIR}/*/email.json`)
-  console.log('═'.repeat(46))
+  log('')
+  log('═'.repeat(46))
+  log('  EMAIL CONTENT COMPLETE')
+  log('═'.repeat(46))
+  log(`  Neighborhood : ${NEIGHBORHOOD}`)
+  log(`  Template     : PAS (3-email sequence)`)
+  log(`  Processed    : ${processed}`)
+  log(`  Skipped      : ${skipped}`)
+  log(`  Errors       : ${errors}`)
+  log(`  Total cost   : $${totalCost.toFixed(4)}`)
+  log(`  Duration     : ${elapsed}s`)
+  log(`  Output       : ${CONTENT_DIR}/*/email.json`)
+  log(`  Log          : ${LOG_FILE}`)
+  log('═'.repeat(46))
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error('[FATAL]', err)
   process.exit(1)
 })
