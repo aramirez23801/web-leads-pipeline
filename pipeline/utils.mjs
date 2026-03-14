@@ -10,6 +10,7 @@
  */
 
 import ExcelJS from 'exceljs';
+import { existsSync, readFileSync } from 'fs';
 
 // ── CDN domains to exclude from logo candidates ──────────────────────────────
 const CDN_DOMAINS = [
@@ -205,4 +206,60 @@ export function getNeighborhoodName() {
     }
   }
   return process.env.NEIGHBORHOOD_NAME || 'maria_de_molina';
+}
+
+// ── Output directory helpers ──────────────────────────────────────────────────
+
+/**
+ * Returns the canonical directory paths for a neighborhood.
+ *
+ * @param {string} neighborhood - e.g. 'maria_de_molina'
+ * @returns {{ root, runs, leads, logs, latestRunFile }}
+ */
+export function getNeighborhoodDirs(neighborhood) {
+  return {
+    root:          `output/${neighborhood}`,
+    runs:          `output/${neighborhood}/runs`,
+    leads:         `output/${neighborhood}/leads`,
+    logs:          `output/${neighborhood}/logs`,
+    latestRunFile: `output/${neighborhood}/latest_run.json`,
+  };
+}
+
+/**
+ * Reads latest_run.json and returns the path to the most recent run folder.
+ * Throws with a helpful message if the file doesn't exist.
+ *
+ * @param {string} neighborhood
+ * @returns {string} e.g. 'output/maria_de_molina/runs/2026-03-05_143000'
+ */
+export function getLatestRunDir(neighborhood) {
+  const dirs = getNeighborhoodDirs(neighborhood);
+  if (!existsSync(dirs.latestRunFile)) {
+    throw new Error(
+      `No latest_run.json found for '${neighborhood}'. Run stage 1 first.\n` +
+      `  Expected: ${dirs.latestRunFile}`
+    );
+  }
+  const { path } = JSON.parse(readFileSync(dirs.latestRunFile, 'utf8'));
+  return path;
+}
+
+/**
+ * Generates a run ID string in the format YYYY-MM-DD_HHmmss (UTC).
+ * @returns {string}
+ */
+export function makeRunId() {
+  const d = new Date();
+  const date = d.toISOString().slice(0, 10);
+  const time = d.toISOString().slice(11, 19).replace(/:/g, '');
+  return `${date}_${time}`;
+}
+
+/**
+ * Returns the current UTC date as YYYY-MM-DD, used for log file naming.
+ * @returns {string}
+ */
+export function logDate() {
+  return new Date().toISOString().slice(0, 10);
 }

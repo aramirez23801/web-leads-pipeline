@@ -5,24 +5,33 @@
 //   node pipeline/7-htmltopng.mjs --neighborhood maria_de_molina
 //   node pipeline/7-htmltopng.mjs --neighborhood maria_de_molina --lead area2_instalaciones_eléctricas_y_mecánicas_s_a
 //
-// Input:  output/content_<neighborhood>/<safeName>/mockdesign.html
-// Output: output/content_<neighborhood>/<safeName>/mockdesign_full.png
-//         output/content_<neighborhood>/<safeName>/mockdesign_preview.png
-//         output/htmltopng_<neighborhood>.log
+// Input:  output/{neighborhood}/leads/<safeName>/mockdesign.html
+// Output: output/{neighborhood}/leads/<safeName>/mockdesign_full.png
+//         output/{neighborhood}/leads/<safeName>/mockdesign_preview.png
+//         output/{neighborhood}/logs/htmltopng_{YYYY-MM-DD}.log
 //
 // Skips leads where both output files already exist (resumable).
 
 import { chromium } from 'playwright';
-import { existsSync, statSync, writeFileSync, appendFileSync } from 'fs';
+import { existsSync, mkdirSync, statSync, writeFileSync, appendFileSync } from 'fs';
 import { join, resolve } from 'path';
-import { getNeighborhoodName, sanitizeName, getTargetLeads } from './utils.mjs';
+import { getNeighborhoodName, sanitizeName, getTargetLeads, getNeighborhoodDirs, getLatestRunDir, logDate } from './utils.mjs';
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
 const NEIGHBORHOOD = getNeighborhoodName();
-const INPUT_FILE   = `output/leads_audited_${NEIGHBORHOOD}.xlsx`;
-const CONTENT_DIR  = `output/content_${NEIGHBORHOOD}`;
-const LOG_FILE     = `output/htmltopng_${NEIGHBORHOOD}.log`;
+const dirs         = getNeighborhoodDirs(NEIGHBORHOOD);
+let RUN_DIR;
+try {
+  RUN_DIR = getLatestRunDir(NEIGHBORHOOD);
+} catch (err) {
+  console.error(`[ERROR] ${err.message}`);
+  process.exit(1);
+}
+const INPUT_FILE  = `${RUN_DIR}/leads_audited.xlsx`;
+const LEADS_DIR   = dirs.leads;
+const LOG_FILE    = `${dirs.logs}/htmltopng_${logDate()}.log`;
+mkdirSync(dirs.logs, { recursive: true });
 const VIEWPORT_W   = 1440;
 const VIEWPORT_H   = 900;
 const SETTLE_MS    = 800; // extra delay after networkidle for animations/fonts
@@ -77,7 +86,7 @@ async function main() {
   // Build lead list
   let leads;
   if (LEAD_FILTER) {
-    const htmlPath = join(CONTENT_DIR, LEAD_FILTER, 'mockdesign.html');
+    const htmlPath = join(LEADS_DIR, LEAD_FILTER, 'mockdesign.html');
     if (!existsSync(htmlPath)) {
       console.error(`[ERROR] mockdesign.html not found for --lead "${LEAD_FILTER}"`);
       console.error(`        Expected: ${htmlPath}`);
@@ -111,7 +120,7 @@ async function main() {
   try {
     for (const lead of leads) {
       const safeName    = lead._safeName;
-      const leadDir     = join(CONTENT_DIR, safeName);
+      const leadDir     = join(LEADS_DIR, safeName);
       const htmlPath    = join(leadDir, 'mockdesign.html');
       const fullPath    = join(leadDir, 'mockdesign_full.png');
       const previewPath = join(leadDir, 'mockdesign_preview.png');
@@ -211,7 +220,7 @@ async function main() {
   log(`  Skipped      : ${skipped}`);
   log(`  Errors       : ${errors}`);
   log(`  Duration     : ${elapsed}s`);
-  log(`  Output       : ${CONTENT_DIR}/`);
+  log(`  Output       : ${LEADS_DIR}/`);
   log(`  Log          : ${LOG_FILE}`);
   log('═'.repeat(46));
 }

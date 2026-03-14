@@ -5,26 +5,32 @@
 //   node pipeline/3-screenshot.mjs -n salamanca
 //   node pipeline/3-screenshot.mjs --lead <safeName>   # single lead (for testing)
 //
-// Input:  output/leads_audited_{neighborhood}.xlsx
-// Output: output/screenshots_{neighborhood}/{safeName}_mobile.png   (full page, max 6000px)
-//         output/screenshots_{neighborhood}/{safeName}_desktop.png  (full page, max 5000px)
-//         output/screenshots_{neighborhood}/manifest.json
-//         output/screenshots_{neighborhood}/errors.log              (errors only)
-//         output/screenshot_{neighborhood}.log                      (full run log)
+// Input:  output/{neighborhood}/runs/{runId}/leads_audited.xlsx     (latest run)
+// Output: output/{neighborhood}/leads/{safeName}/screenshot_mobile.png   (full page, max 6000px)
+//         output/{neighborhood}/leads/{safeName}/screenshot_desktop.png  (full page, max 5000px)
+//         output/{neighborhood}/runs/{runId}/screenshot_manifest.json
+//         output/{neighborhood}/logs/screenshot_{YYYY-MM-DD}.log
 
 import 'dotenv/config';
 import puppeteer from 'puppeteer';
 import sharp from 'sharp';
 import { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync } from 'fs';
 import pLimit from 'p-limit';
-import { sanitizeName, getNeighborhoodName, getTargetLeads } from './utils.mjs';
+import { sanitizeName, getNeighborhoodName, getTargetLeads, getNeighborhoodDirs, getLatestRunDir, logDate } from './utils.mjs';
 
-const NEIGHBORHOOD    = getNeighborhoodName();
-const INPUT_FILE      = `output/leads_audited_${NEIGHBORHOOD}.xlsx`;
-const SCREENSHOT_DIR  = `output/screenshots_${NEIGHBORHOOD}`;
-const LOG_FILE        = `output/screenshot_${NEIGHBORHOOD}.log`;
-const ERROR_LOG       = `${SCREENSHOT_DIR}/errors.log`;
-const MANIFEST_FILE   = `${SCREENSHOT_DIR}/manifest.json`;
+const NEIGHBORHOOD  = getNeighborhoodName();
+const dirs          = getNeighborhoodDirs(NEIGHBORHOOD);
+let RUN_DIR;
+try {
+  RUN_DIR = getLatestRunDir(NEIGHBORHOOD);
+} catch (err) {
+  console.error(`[ERROR] ${err.message}`);
+  process.exit(1);
+}
+const INPUT_FILE    = `${RUN_DIR}/leads_audited.xlsx`;
+const LEADS_DIR     = dirs.leads;
+const LOG_FILE      = `${dirs.logs}/screenshot_${logDate()}.log`;
+const MANIFEST_FILE = `${RUN_DIR}/screenshot_manifest.json`;
 const CONCURRENCY     = 3;
 const TIMEOUT_MS      = 20000;
 const DESKTOP_MAX_H   = 5000; // px cap for full-page desktop screenshots
@@ -49,8 +55,7 @@ function log(msg) {
 
 function logError(msg) {
   const line = `[${new Date().toISOString()}] ERROR ${msg}`;
-  appendFileSync(LOG_FILE,   line + '\n');
-  appendFileSync(ERROR_LOG,  line + '\n');
+  appendFileSync(LOG_FILE, line + '\n');
   console.error(`  ✗ ${msg}`);
 }
 
@@ -94,7 +99,8 @@ async function main() {
     process.exit(1);
   }
 
-  mkdirSync(SCREENSHOT_DIR, { recursive: true });
+  mkdirSync(LEADS_DIR,  { recursive: true });
+  mkdirSync(dirs.logs, { recursive: true });
 
   const startTime = Date.now();
   log(`[INIT] Neighborhood: ${NEIGHBORHOOD}`);
@@ -142,8 +148,10 @@ async function main() {
           return;
         }
 
-        const mobilePath  = `${SCREENSHOT_DIR}/${safeName}_mobile.png`;
-        const desktopPath = `${SCREENSHOT_DIR}/${safeName}_desktop.png`;
+        const leadDir     = `${LEADS_DIR}/${safeName}`;
+        mkdirSync(leadDir, { recursive: true });
+        const mobilePath  = `${leadDir}/screenshot_mobile.png`;
+        const desktopPath = `${leadDir}/screenshot_desktop.png`;
 
         // Resume: skip if both screenshots already exist and were successful
         const prev = manifestMap.get(safeName);

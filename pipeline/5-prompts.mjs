@@ -7,22 +7,31 @@
 //
 // Reads content.json per Tier 1 + Tier 2 lead and assembles the complete prompt
 // string that stage 6 will send verbatim to Claude Sonnet.
-// Output: output/content_{neighborhood}/{safeName}/design_prompt.md
+// Output: output/{neighborhood}/leads/{safeName}/design_prompt.md
 //
 // Resume-safe: skips leads that already have design_prompt.md.
 // Use --lead to re-generate a single lead regardless of skip check.
 
 import 'dotenv/config'
-import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'fs'
 import { join } from 'path'
-import { getNeighborhoodName, sanitizeName, getTargetLeads } from './utils.mjs'
+import { getNeighborhoodName, sanitizeName, getTargetLeads, getNeighborhoodDirs, getLatestRunDir, logDate } from './utils.mjs'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const NEIGHBORHOOD = getNeighborhoodName()
-const INPUT_FILE   = `output/leads_audited_${NEIGHBORHOOD}.xlsx`
-const CONTENT_DIR  = `output/content_${NEIGHBORHOOD}`
-const LOG_FILE     = `output/prompts_${NEIGHBORHOOD}.log`
+const dirs         = getNeighborhoodDirs(NEIGHBORHOOD)
+let RUN_DIR
+try {
+  RUN_DIR = getLatestRunDir(NEIGHBORHOOD)
+} catch (err) {
+  console.error(`[ERROR] ${err.message}`)
+  process.exit(1)
+}
+const INPUT_FILE  = `${RUN_DIR}/leads_audited.xlsx`
+const LEADS_DIR   = dirs.leads
+const LOG_FILE    = `${dirs.logs}/prompts_${logDate()}.log`
+mkdirSync(dirs.logs, { recursive: true })
 
 // ── CLI flags ─────────────────────────────────────────────────────────────────
 
@@ -601,8 +610,8 @@ function buildDesignPrompt(content) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  if (!existsSync(CONTENT_DIR)) {
-    console.error(`[ERROR] Content directory not found: ${CONTENT_DIR}`)
+  if (!existsSync(LEADS_DIR)) {
+    console.error(`[ERROR] Content directory not found: ${LEADS_DIR}`)
     console.error(`        Run stage 4 first: node pipeline/4-content.mjs --neighborhood ${NEIGHBORHOOD}`)
     process.exit(1)
   }
@@ -617,7 +626,7 @@ async function main() {
 
   let leads
   if (LEAD_FILTER) {
-    const contentPath = join(CONTENT_DIR, LEAD_FILTER, 'content.json')
+    const contentPath = join(LEADS_DIR, LEAD_FILTER, 'content.json')
     if (!existsSync(contentPath)) {
       console.error(`[ERROR] content.json not found for --lead "${LEAD_FILTER}"`)
       process.exit(1)
@@ -641,8 +650,8 @@ async function main() {
 
   for (const lead of leads) {
     const safeName = LEAD_FILTER || sanitizeName(lead.name)
-    const contentPath = join(CONTENT_DIR, safeName, 'content.json')
-    const outputPath  = join(CONTENT_DIR, safeName, 'design_prompt.md')
+    const contentPath = join(LEADS_DIR, safeName, 'content.json')
+    const outputPath  = join(LEADS_DIR, safeName, 'design_prompt.md')
 
     // Resume check — skip if already done (unless --lead forces regen)
     if (!LEAD_FILTER && existsSync(outputPath)) {
@@ -690,7 +699,7 @@ async function main() {
   log(`  Skipped:       ${skipped}`)
   log(`  Errors:        ${errors}`)
   log(`  Duration:      ${elapsed}s`)
-  log(`  Output:        ${CONTENT_DIR}/<name>/design_prompt.md`)
+  log(`  Output:        ${LEADS_DIR}/<name>/design_prompt.md`)
   log('═══════════════════════════════════════════')
 }
 

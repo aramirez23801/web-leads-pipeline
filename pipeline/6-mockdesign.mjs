@@ -6,27 +6,36 @@
 //   node pipeline/6-mockdesign.mjs --neighborhood maria_de_molina --dry-run
 //   node pipeline/6-mockdesign.mjs --neighborhood maria_de_molina --lead area2_instalaciones_eléctricas_y_mecánicas_s_a
 //
-// Input:  output/leads_audited_<neighborhood>.xlsx
-//         output/content_<neighborhood>/<safeName>/design_prompt.md  (stage 5)
+// Input:  output/{neighborhood}/runs/{runId}/leads_audited.xlsx      (latest run)
+//         output/{neighborhood}/leads/<safeName>/design_prompt.md    (stage 5)
 //         docs/design-prompt-guide.md                                (shared UI/UX standards)
-// Output: output/content_<neighborhood>/<safeName>/mockdesign.html
-//         output/mockdesign_<neighborhood>.log
+// Output: output/{neighborhood}/leads/<safeName>/mockdesign.html
+//         output/{neighborhood}/logs/mockdesign_{YYYY-MM-DD}.log
 //
 // Skips leads that already have mockdesign.html (resumable).
 // --dry-run prints the full combined prompt for the first 2 leads without calling the API.
 
 import 'dotenv/config'
 import Anthropic from '@anthropic-ai/sdk'
-import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'fs'
 import { join, resolve } from 'path'
-import { getNeighborhoodName, sanitizeName, getTargetLeads } from './utils.mjs'
+import { getNeighborhoodName, sanitizeName, getTargetLeads, getNeighborhoodDirs, getLatestRunDir, logDate } from './utils.mjs'
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
 const NEIGHBORHOOD = getNeighborhoodName()
-const INPUT_FILE   = `output/leads_audited_${NEIGHBORHOOD}.xlsx`
-const CONTENT_DIR  = `output/content_${NEIGHBORHOOD}`
-const LOG_FILE     = `output/mockdesign_${NEIGHBORHOOD}.log`
+const dirs         = getNeighborhoodDirs(NEIGHBORHOOD)
+let RUN_DIR
+try {
+  RUN_DIR = getLatestRunDir(NEIGHBORHOOD)
+} catch (err) {
+  console.error(`[ERROR] ${err.message}`)
+  process.exit(1)
+}
+const INPUT_FILE  = `${RUN_DIR}/leads_audited.xlsx`
+const LEADS_DIR   = dirs.leads
+const LOG_FILE    = `${dirs.logs}/mockdesign_${logDate()}.log`
+mkdirSync(dirs.logs, { recursive: true })
 const GUIDE_FILE   = 'docs/design-prompt-guide.md'
 const MODEL        = 'claude-sonnet-4-6'
 // 600–900 line HTML ≈ 15–20K output tokens. 26K gives headroom for complex sites.
@@ -82,7 +91,7 @@ function readDesignGuide() {
  * Returns null if the file doesn't exist or is too small to be valid.
  */
 function readDesignPrompt(safeName) {
-  const path = join(CONTENT_DIR, safeName, 'design_prompt.md')
+  const path = join(LEADS_DIR, safeName, 'design_prompt.md')
   if (!existsSync(path)) return null
   try {
     const content = readFileSync(path, 'utf-8')
@@ -136,7 +145,7 @@ async function main() {
   let leads
   if (LEAD_FILTER) {
     // --lead mode: verify design_prompt.md exists, no XLSX dependency
-    const promptPath = join(CONTENT_DIR, LEAD_FILTER, 'design_prompt.md')
+    const promptPath = join(LEADS_DIR, LEAD_FILTER, 'design_prompt.md')
     if (!existsSync(promptPath)) {
       console.error(`[ERROR] design_prompt.md not found for --lead "${LEAD_FILTER}"`)
       console.error(`        Expected: ${promptPath}`)
@@ -169,7 +178,7 @@ async function main() {
   for (let i = 0; i < leads.length; i++) {
     const lead = leads[i]
     const safeName   = LEAD_FILTER || sanitizeName(lead.name)
-    const outputPath = join(CONTENT_DIR, safeName, 'mockdesign.html')
+    const outputPath = join(LEADS_DIR, safeName, 'mockdesign.html')
 
     // Skip if already generated (resumable)
     if (!isDryRun && existsSync(outputPath)) {
@@ -300,7 +309,7 @@ async function main() {
   log(`  Errors       : ${errors}`)
   log(`  Total cost   : $${totalCost.toFixed(4)}`)
   log(`  Duration     : ${elapsed}s`)
-  log(`  Output       : ${CONTENT_DIR}/`)
+  log(`  Output       : ${LEADS_DIR}/`)
   log(`  Log          : ${LOG_FILE}`)
   log('═'.repeat(46))
 }

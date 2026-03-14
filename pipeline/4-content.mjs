@@ -6,10 +6,10 @@
 //   node pipeline/4-content.mjs -n retiro
 //   node pipeline/4-content.mjs --lead <safeName>   # single lead (for testing)
 //
-// Input:  output/leads_audited_{neighborhood}.xlsx
-// Output: output/content_{neighborhood}/{safeName}/content.json
-//         output/content_{neighborhood}/{safeName}/logo.png  (if found)
-//         output/content_{neighborhood}.log                  (full run log)
+// Input:  output/{neighborhood}/runs/{runId}/leads_audited.xlsx   (latest run)
+// Output: output/{neighborhood}/leads/{safeName}/content.json
+//         output/{neighborhood}/leads/{safeName}/logo.png  (if found)
+//         output/{neighborhood}/logs/content_{YYYY-MM-DD}.log
 //
 // Extraction strategy:
 //   1. Homepage: headings+content, paragraphs, testimonials, service lists, nav,
@@ -22,12 +22,21 @@ import puppeteer from 'puppeteer';
 import { existsSync, mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import pLimit from 'p-limit';
-import { getNeighborhoodName, sanitizeName, getTargetLeads, findLogo } from './utils.mjs';
+import { getNeighborhoodName, sanitizeName, getTargetLeads, findLogo, getNeighborhoodDirs, getLatestRunDir, logDate } from './utils.mjs';
 
 const NEIGHBORHOOD = getNeighborhoodName();
-const INPUT_FILE   = `output/leads_audited_${NEIGHBORHOOD}.xlsx`;
-const CONTENT_DIR  = `output/content_${NEIGHBORHOOD}`;
-const LOG_FILE     = `output/content_${NEIGHBORHOOD}.log`;
+const dirs         = getNeighborhoodDirs(NEIGHBORHOOD);
+let RUN_DIR;
+try {
+  RUN_DIR = getLatestRunDir(NEIGHBORHOOD);
+} catch (err) {
+  console.error(`[ERROR] ${err.message}`);
+  process.exit(1);
+}
+const INPUT_FILE  = `${RUN_DIR}/leads_audited.xlsx`;
+const LEADS_DIR   = dirs.leads;
+const LOG_FILE    = `${dirs.logs}/content_${logDate()}.log`;
+mkdirSync(dirs.logs, { recursive: true });
 const CONCURRENCY  = 3;
 const TIMEOUT_MS   = 20000;
 const LOGO_FETCH_TIMEOUT_MS = 5000;
@@ -352,7 +361,7 @@ async function main() {
   // Resume: count already-completed leads upfront
   let alreadyDone = 0;
   for (const lead of leads) {
-    const contentPath = join(CONTENT_DIR, sanitizeName(lead.name || 'unknown'), 'content.json');
+    const contentPath = join(LEADS_DIR, sanitizeName(lead.name || 'unknown'), 'content.json');
     if (existsSync(contentPath)) {
       try {
         const existing = JSON.parse(readFileSync(contentPath, 'utf-8'));
@@ -380,7 +389,7 @@ async function main() {
         const name     = lead.name || 'unknown';
         const safeName = sanitizeName(name);
         const url      = lead.final_url || lead.website;
-        const leadDir  = join(CONTENT_DIR, safeName);
+        const leadDir  = join(LEADS_DIR, safeName);
         const contentPath = join(leadDir, 'content.json');
 
         if (!url) {
@@ -552,7 +561,7 @@ async function main() {
   log(`  Scraped OK:       ${completed - errors}`);
   log(`  Errors:           ${errors}`);
   log(`  Duration:         ${elapsed}s`);
-  log(`  Output:           ${CONTENT_DIR}/`);
+  log(`  Output:           ${LEADS_DIR}/`);
   log(`  Log:              ${LOG_FILE}`);
   log('═══════════════════════════════════════════');
 }

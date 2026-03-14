@@ -6,10 +6,10 @@
 //   node pipeline/9-deploy.mjs --neighborhood maria_de_molina --dry-run
 //   node pipeline/9-deploy.mjs --neighborhood maria_de_molina --lead <safeName>
 //
-// Input:  output/leads_audited_<neighborhood>.xlsx
-//         output/content_<neighborhood>/<safeName>/mockdesign.html
-//         output/content_<neighborhood>/<safeName>/email.json  (needs {{PREVIEW_URL}} in email2/email3)
-// Output: output/content_<neighborhood>/<safeName>/email.json  (previewUrl set, email2/email3 updated)
+// Input:  output/{neighborhood}/runs/{runId}/leads_audited.xlsx       (latest run)
+//         output/{neighborhood}/leads/<safeName>/mockdesign.html
+//         output/{neighborhood}/leads/<safeName>/email.json           (needs {{PREVIEW_URL}} in email2/email3)
+// Output: output/{neighborhood}/leads/<safeName>/email.json           (previewUrl set, email2/email3 updated)
 //
 // Each lead's mockdesign.html (+ logo.png if present) is uploaded to a dedicated
 // Cloudflare Pages deployment. The returned preview URL replaces {{PREVIEW_URL}} in
@@ -34,13 +34,21 @@
 import 'dotenv/config'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { getNeighborhoodName, sanitizeName, getTargetLeads } from './utils.mjs'
+import { getNeighborhoodName, sanitizeName, getTargetLeads, getNeighborhoodDirs, getLatestRunDir } from './utils.mjs'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const NEIGHBORHOOD  = getNeighborhoodName()
-const INPUT_FILE    = `output/leads_audited_${NEIGHBORHOOD}.xlsx`
-const CONTENT_DIR   = `output/content_${NEIGHBORHOOD}`
+const dirs          = getNeighborhoodDirs(NEIGHBORHOOD)
+let RUN_DIR
+try {
+  RUN_DIR = getLatestRunDir(NEIGHBORHOOD)
+} catch (err) {
+  console.error(`[ERROR] ${err.message}`)
+  process.exit(1)
+}
+const INPUT_FILE    = `${RUN_DIR}/leads_audited.xlsx`
+const LEADS_DIR     = dirs.leads
 const CF_BASE       = 'https://api.cloudflare.com/client/v4'
 const STALE_DAYS    = 15
 const SLEEP_MS      = 600  // between deploys — CF Pages rate limit headroom
@@ -289,7 +297,7 @@ async function main() {
   // ── Process each lead ──────────────────────────────────────────────────────
   for (const lead of leads) {
     const safeName    = LEAD_FILTER || sanitizeName(lead.name)
-    const leadDir     = join(CONTENT_DIR, safeName)
+    const leadDir     = join(LEADS_DIR, safeName)
     const displayName = lead.name || safeName
 
     const mockdesignPath = join(leadDir, 'mockdesign.html')

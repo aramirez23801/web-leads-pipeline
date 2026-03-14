@@ -6,26 +6,35 @@
 //   node pipeline/2-auditor.mjs -n retiro --limit 10   # audit retiro, first 10 domains
 //   node pipeline/2-auditor.mjs --force                # bypass cache (re-crawl everything)
 //
-// Input:  output/businesses_{neighborhood}.xlsx
-// Output: output/leads_audited_{neighborhood}.xlsx
-//         output/outreach_{neighborhood}.xlsx
-// Cache:  output/crawl_cache_{neighborhood}.json
-// Log:    output/auditor_{neighborhood}.log
+// Input:  output/{neighborhood}/runs/{runId}/businesses.xlsx      (latest run)
+// Output: output/{neighborhood}/runs/{runId}/leads_audited.xlsx
+//         output/{neighborhood}/runs/{runId}/outreach.xlsx
+// Cache:  output/{neighborhood}/crawl_cache.json               (shared across re-scrapes)
+// Log:    output/{neighborhood}/logs/auditor_{YYYY-MM-DD}.log
 
 import 'dotenv/config';
-import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'fs';
 import { load } from 'cheerio';
 import pLimit from 'p-limit';
 import ExcelJS from 'exceljs';
-import { getNeighborhoodName } from './utils.mjs';
+import { getNeighborhoodName, getNeighborhoodDirs, getLatestRunDir, logDate } from './utils.mjs';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const NEIGHBORHOOD  = getNeighborhoodName();
-const INPUT_FILE    = `output/businesses_${NEIGHBORHOOD}.xlsx`;
-const OUTPUT_FILE   = `output/leads_audited_${NEIGHBORHOOD}.xlsx`;
-const OUTREACH_FILE = `output/outreach_${NEIGHBORHOOD}.xlsx`;
-const CACHE_FILE    = `output/crawl_cache_${NEIGHBORHOOD}.json`;
-const LOG_FILE      = `output/auditor_${NEIGHBORHOOD}.log`;
+const dirs          = getNeighborhoodDirs(NEIGHBORHOOD);
+let RUN_DIR;
+try {
+  RUN_DIR = getLatestRunDir(NEIGHBORHOOD);
+} catch (err) {
+  console.error(`[ERROR] ${err.message}`);
+  process.exit(1);
+}
+const INPUT_FILE    = `${RUN_DIR}/businesses.xlsx`;
+const OUTPUT_FILE   = `${RUN_DIR}/leads_audited.xlsx`;
+const OUTREACH_FILE = `${RUN_DIR}/outreach.xlsx`;
+const CACHE_FILE    = `${dirs.root}/crawl_cache.json`;   // shared across re-scrapes
+const LOG_FILE      = `${dirs.logs}/auditor_${logDate()}.log`;
+mkdirSync(dirs.logs, { recursive: true });
 const CONCURRENCY   = 5;
 const DELAY_MS      = 200;
 const TIMEOUT_MS    = 15000;
