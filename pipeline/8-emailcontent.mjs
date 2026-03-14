@@ -6,9 +6,9 @@
 //   node pipeline/8-emailcontent.mjs --neighborhood maria_de_molina --dry-run
 //   node pipeline/8-emailcontent.mjs --neighborhood maria_de_molina --lead <safeName>
 //
-// Input:  output/leads_audited_<neighborhood>.xlsx
-//         output/content_<neighborhood>/<safeName>/content.json
-// Output: output/content_<neighborhood>/<safeName>/email.json
+// Input:  output/{neighborhood}/runs/{runId}/leads_audited.xlsx      (latest run)
+//         output/{neighborhood}/leads/<safeName>/content.json
+// Output: output/{neighborhood}/leads/<safeName>/email.json
 //   {
 //     email1: { subject, body },          ← Day 0  — plain text, no link
 //     email2: { subject, body },          ← Day 4  — delivers preview link
@@ -31,16 +31,25 @@
 
 import 'dotenv/config'
 import Anthropic from '@anthropic-ai/sdk'
-import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'fs'
 import { join } from 'path'
-import { getNeighborhoodName, sanitizeName, getTargetLeads } from './utils.mjs'
+import { getNeighborhoodName, sanitizeName, getTargetLeads, getNeighborhoodDirs, getLatestRunDir, logDate } from './utils.mjs'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const NEIGHBORHOOD = getNeighborhoodName()
-const INPUT_FILE = `output/leads_audited_${NEIGHBORHOOD}.xlsx`
-const CONTENT_DIR = `output/content_${NEIGHBORHOOD}`
-const LOG_FILE = `output/emailcontent_${NEIGHBORHOOD}.log`
+const dirs         = getNeighborhoodDirs(NEIGHBORHOOD)
+let RUN_DIR
+try {
+  RUN_DIR = getLatestRunDir(NEIGHBORHOOD)
+} catch (err) {
+  console.error(`[ERROR] ${err.message}`)
+  process.exit(1)
+}
+const INPUT_FILE = `${RUN_DIR}/leads_audited.xlsx`
+const LEADS_DIR  = dirs.leads
+const LOG_FILE   = `${dirs.logs}/emailcontent_${logDate()}.log`
+mkdirSync(dirs.logs, { recursive: true })
 const MODEL = 'claude-haiku-4-5-20251001'
 const MAX_TOKENS = 192 // JSON with problema sentence + tipo field
 const SLEEP_MS = 200
@@ -279,13 +288,13 @@ async function main() {
   // ── Build lead list ────────────────────────────────────────────────────────
   let leads
   if (LEAD_FILTER) {
-    const content = readJson(join(CONTENT_DIR, LEAD_FILTER, 'content.json'))
+    const content = readJson(join(LEADS_DIR, LEAD_FILTER, 'content.json'))
     if (!content) {
       console.error(
         `[ERROR] content.json not found for --lead "${LEAD_FILTER}"`
       )
       console.error(
-        `        Expected: ${join(CONTENT_DIR, LEAD_FILTER, 'content.json')}`
+        `        Expected: ${join(LEADS_DIR, LEAD_FILTER, 'content.json')}`
       )
       process.exit(1)
     }
@@ -317,7 +326,7 @@ async function main() {
   for (let i = 0; i < leads.length; i++) {
     const lead = leads[i]
     const safeName = LEAD_FILTER || sanitizeName(lead.name)
-    const emailPath = join(CONTENT_DIR, safeName, 'email.json')
+    const emailPath = join(LEADS_DIR, safeName, 'email.json')
     const displayName = lead.name || safeName
 
     // Resume: skip if email.json already has a complete sequence
@@ -334,7 +343,7 @@ async function main() {
       }
     }
 
-    const content = readJson(join(CONTENT_DIR, safeName, 'content.json'))
+    const content = readJson(join(LEADS_DIR, safeName, 'content.json'))
     if (!content) {
       log(`[EMAIL] SKIP  ${displayName} — content.json not found`)
       skipped++
@@ -480,7 +489,7 @@ async function main() {
   log(`  Errors       : ${errors}`)
   log(`  Total cost   : $${totalCost.toFixed(4)}`)
   log(`  Duration     : ${elapsed}s`)
-  log(`  Output       : ${CONTENT_DIR}/*/email.json`)
+  log(`  Output       : ${LEADS_DIR}/*/email.json`)
   log(`  Log          : ${LOG_FILE}`)
   log('═'.repeat(46))
 }

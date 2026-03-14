@@ -41,14 +41,10 @@ import ExcelJS from 'exceljs';
 import { writeFileSync, readFileSync, appendFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
-import { getNeighborhoodName } from './utils.mjs';
+import { getNeighborhoodName, getNeighborhoodDirs, makeRunId, logDate } from './utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const OUTPUT_DIR = join(__dirname, '..', 'output');
 const TRACKER_PATH = join(__dirname, '..', 'neighborhoods.json');
-
-// Ensure output dir exists
-mkdirSync(OUTPUT_DIR, { recursive: true });
 
 // ─── Neighborhood Config ───────────────────────────────────────────────────────
 
@@ -117,8 +113,14 @@ if (CLI_LAT !== null && CLI_LON !== null) {
   process.exit(1);
 }
 const LOCATION_LABEL = NEIGHBORHOOD.replace(/_/g, ' ');
-const XLSX_PATH = join(OUTPUT_DIR, `businesses_${NEIGHBORHOOD}.xlsx`);
-const LOG_PATH = join(OUTPUT_DIR, `scraper_${NEIGHBORHOOD}.log`);
+const dirs    = getNeighborhoodDirs(NEIGHBORHOOD);
+const RUN_ID  = makeRunId();
+const RUN_DIR = `${dirs.runs}/${RUN_ID}`;
+const XLSX_PATH = `${RUN_DIR}/businesses.xlsx`;
+const LOG_PATH  = `${dirs.logs}/scraper_${logDate()}.log`;
+
+mkdirSync(RUN_DIR,   { recursive: true });
+mkdirSync(dirs.logs, { recursive: true });
 
 // ─── API Config ────────────────────────────────────────────────────────────────
 
@@ -655,6 +657,16 @@ async function runScraper(dryRun = false) {
 
   await wb.xlsx.writeFile(XLSX_PATH);
   log(`\nXLSX written to: ${XLSX_PATH}`);
+
+  // Update latest_run.json so downstream stages find this run (skip for dry runs)
+  if (!dryRun) {
+    writeFileSync(`${dirs.root}/latest_run.json`, JSON.stringify({
+      runId: RUN_ID,
+      path:  RUN_DIR,
+      createdAt: new Date().toISOString(),
+    }, null, 2));
+    log(`Run pointer updated: ${dirs.root}/latest_run.json → ${RUN_DIR}`);
+  }
 
   // Update neighborhood registry (skip for dry runs)
   if (!dryRun) {
